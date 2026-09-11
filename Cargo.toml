@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/apex-core",
+    "crates/apex-ui",
+    "crates/apex-cli",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/apex-editor/apex"
+rust-version = "1.88"
+
+[workspace.dependencies]
+anyhow = "1.0"
+ropey = "1.6"
+thiserror = "2.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
