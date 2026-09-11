@@ -15,11 +15,14 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 anyhow = "1.0"
+glyphon = "0.12"
+pollster = "1.0"
 ropey = "1.6"
 thiserror = "2.0"
+wgpu = "30.0"
+winit = "0.30"
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
-
