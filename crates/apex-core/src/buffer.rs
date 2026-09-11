@@ -45,6 +45,15 @@ impl Buffer {
         }
     }
 
+    pub fn from_text(text: impl AsRef<str>) -> Self {
+        Self {
+            text: Rope::from_str(text.as_ref()),
+            cursors: vec![Cursor::default()],
+            path: None,
+            dirty: false,
+        }
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self, BufferError> {
         let path = path.as_ref().to_path_buf();
         let file = fs::File::open(&path).map_err(|source| BufferError::Io {
@@ -123,6 +132,10 @@ impl Buffer {
 
     pub fn text(&self) -> String {
         self.text.to_string()
+    }
+
+    pub fn len_chars(&self) -> usize {
+        self.text.len_chars()
     }
 
     pub fn cursor(&self) -> Cursor {
