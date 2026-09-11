@@ -4,6 +4,7 @@ use std::{sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
 use apex_core::Buffer as EditorBuffer;
+use apex_syntax::{HighlightKind, Language, SyntaxDocument};
 use glyphon::{
     Attrs, Buffer as TextBuffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
@@ -85,6 +86,7 @@ impl Application {
             _ => return,
         }
         state.reset_blink();
+        state.sync_syntax();
         state.window.request_redraw();
     }
 }
@@ -140,6 +142,7 @@ struct WindowState {
     surface: wgpu::Surface<'static>,
     surface_config: SurfaceConfiguration,
     editor: EditorBuffer,
+    syntax: Option<SyntaxDocument>,
     font_system: FontSystem,
     swash_cache: SwashCache,
     viewport: Viewport,
@@ -206,6 +209,10 @@ impl WindowState {
             Some(size.height.saturating_sub(32) as f32),
         );
 
+        let syntax = editor
+            .path()
+            .and_then(Language::from_path)
+            .and_then(|language| SyntaxDocument::new(language, editor.text()).ok());
         Self {
             instance,
             device,
@@ -213,6 +220,7 @@ impl WindowState {
             surface,
             surface_config,
             editor,
+            syntax,
             font_system,
             swash_cache: SwashCache::new(),
             viewport,
@@ -239,7 +247,15 @@ impl WindowState {
         self.blink_started = Instant::now();
     }
 
-    fn display_text(&self) -> String {
+    fn sync_syntax(&mut self) {
+        if let Some(syntax) = self.syntax.as_mut()
+            && let Err(error) = syntax.update_source(&self.editor.text())
+        {
+            eprintln!("Apex syntax: {error}");
+        }
+    }
+
+    fn display_text(&self) -> (String, Option<usize>) {
         let mut text = self.editor.text();
         if (self.blink_started.elapsed().as_millis() / 500).is_multiple_of(2) {
             let byte_index = text
@@ -247,18 +263,23 @@ impl WindowState {
                 .nth(self.editor.cursor().char_index)
                 .map_or(text.len(), |(index, _)| index);
             text.insert(byte_index, '│');
+            return (text, Some(byte_index));
         }
-        text
+        (text, None)
     }
 
     fn render(&mut self) {
-        let display_text = self.display_text();
-        self.text_buffer.set_text(
-            &display_text,
-            &Attrs::new().family(Family::Monospace),
-            Shaping::Advanced,
-            None,
-        );
+        let (display_text, cursor_byte) = self.display_text();
+        let default_attrs = Attrs::new().family(Family::Monospace);
+        if let Some(syntax) = self.syntax.as_ref() {
+            let spans = syntax.highlights();
+            let rich_text = rich_text_segments(&display_text, &spans, cursor_byte);
+            self.text_buffer
+                .set_rich_text(rich_text, &default_attrs, Shaping::Advanced, None);
+        } else {
+            self.text_buffer
+                .set_text(&display_text, &default_attrs, Shaping::Advanced, None);
+        }
         self.text_buffer
             .shape_until_scroll(&mut self.font_system, false);
         self.viewport.update(
@@ -348,5 +369,65 @@ impl WindowState {
 
         // Continuous vsync redraw keeps the input-to-glyph path at display rate.
         self.window.request_redraw();
+    }
+}
+
+fn rich_text_segments<'text>(
+    text: &'text str,
+    spans: &[apex_syntax::HighlightSpan],
+    cursor_byte: Option<usize>,
+) -> Vec<(&'text str, Attrs<'static>)> {
+    const CURSOR_LEN: usize = '│'.len_utf8();
+    let mut segments = Vec::with_capacity(spans.len() * 2 + 1);
+    let mut consumed = 0;
+    for span in spans {
+        let mut start = span.bytes.start;
+        let mut end = span.bytes.end;
+        if let Some(cursor) = cursor_byte {
+            if cursor <= start {
+                start += CURSOR_LEN;
+                end += CURSOR_LEN;
+            } else if cursor < end {
+                end += CURSOR_LEN;
+            }
+        }
+        if start < consumed
+            || end > text.len()
+            || !text.is_char_boundary(start)
+            || !text.is_char_boundary(end)
+        {
+            continue;
+        }
+        if consumed < start {
+            segments.push((
+                &text[consumed..start],
+                Attrs::new().family(Family::Monospace),
+            ));
+        }
+        segments.push((
+            &text[start..end],
+            Attrs::new()
+                .family(Family::Monospace)
+                .color(highlight_color(span.kind)),
+        ));
+        consumed = end;
+    }
+    if consumed < text.len() {
+        segments.push((&text[consumed..], Attrs::new().family(Family::Monospace)));
+    }
+    if segments.is_empty() {
+        segments.push((text, Attrs::new().family(Family::Monospace)));
+    }
+    segments
+}
+
+fn highlight_color(kind: HighlightKind) -> Color {
+    match kind {
+        HighlightKind::Comment => Color::rgb(106, 153, 85),
+        HighlightKind::String => Color::rgb(206, 145, 120),
+        HighlightKind::Number | HighlightKind::Constant => Color::rgb(181, 206, 168),
+        HighlightKind::Keyword => Color::rgb(197, 134, 192),
+        HighlightKind::Function => Color::rgb(220, 220, 170),
+        HighlightKind::Type => Color::rgb(78, 201, 176),
     }
 }

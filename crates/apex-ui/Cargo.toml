@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 apex-core = { path = "../apex-core" }
+apex-syntax = { path = "../apex-syntax" }
 anyhow.workspace = true
 glyphon.workspace = true
 pollster.workspace = true
