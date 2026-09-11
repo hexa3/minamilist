@@ -14,7 +14,7 @@ pub struct Cursor {
 #[derive(Debug)]
 pub struct Buffer {
     text: Rope,
-    cursor: Cursor,
+    cursors: Vec<Cursor>,
     path: Option<PathBuf>,
     dirty: bool,
 }
@@ -39,7 +39,7 @@ impl Buffer {
     pub fn new() -> Self {
         Self {
             text: Rope::new(),
-            cursor: Cursor::default(),
+            cursors: vec![Cursor::default()],
             path: None,
             dirty: false,
         }
@@ -57,34 +57,68 @@ impl Buffer {
         })?;
         Ok(Self {
             text,
-            cursor: Cursor::default(),
+            cursors: vec![Cursor::default()],
             path: Some(path),
             dirty: false,
         })
     }
 
     pub fn insert(&mut self, text: &str) {
-        self.text.insert(self.cursor.char_index, text);
-        self.cursor.char_index += text.chars().count();
+        let inserted = text.chars().count();
+        let mut positions: Vec<usize> = self
+            .cursors
+            .iter()
+            .map(|cursor| cursor.char_index)
+            .collect();
+        positions.sort_unstable();
+        positions.dedup();
+        for position in positions.iter().rev() {
+            self.text.insert(*position, text);
+        }
+        for cursor in &mut self.cursors {
+            let preceding = positions
+                .iter()
+                .filter(|position| **position <= cursor.char_index)
+                .count();
+            cursor.char_index += inserted * preceding;
+        }
         self.dirty = true;
     }
 
     pub fn backspace(&mut self) {
-        if self.cursor.char_index == 0 {
+        let mut positions: Vec<usize> = self
+            .cursors
+            .iter()
+            .filter_map(|cursor| cursor.char_index.checked_sub(1))
+            .collect();
+        positions.sort_unstable();
+        positions.dedup();
+        if positions.is_empty() {
             return;
         }
-        let start = self.cursor.char_index - 1;
-        self.text.remove(start..self.cursor.char_index);
-        self.cursor.char_index = start;
+        for position in positions.iter().rev() {
+            self.text.remove(*position..*position + 1);
+        }
+        for cursor in &mut self.cursors {
+            let removed_before = positions
+                .iter()
+                .filter(|position| **position < cursor.char_index)
+                .count();
+            cursor.char_index = cursor.char_index.saturating_sub(removed_before);
+        }
         self.dirty = true;
     }
 
     pub fn move_left(&mut self) {
-        self.cursor.char_index = self.cursor.char_index.saturating_sub(1);
+        for cursor in &mut self.cursors {
+            cursor.char_index = cursor.char_index.saturating_sub(1);
+        }
     }
 
     pub fn move_right(&mut self) {
-        self.cursor.char_index = (self.cursor.char_index + 1).min(self.text.len_chars());
+        for cursor in &mut self.cursors {
+            cursor.char_index = (cursor.char_index + 1).min(self.text.len_chars());
+        }
     }
 
     pub fn text(&self) -> String {
@@ -92,7 +126,29 @@ impl Buffer {
     }
 
     pub fn cursor(&self) -> Cursor {
-        self.cursor
+        self.cursors[0]
+    }
+
+    pub fn cursors(&self) -> &[Cursor] {
+        &self.cursors
+    }
+
+    pub fn set_cursor(&mut self, char_index: usize) {
+        self.cursors.clear();
+        self.cursors.push(Cursor {
+            char_index: char_index.min(self.text.len_chars()),
+        });
+    }
+
+    pub fn add_cursor(&mut self, char_index: usize) {
+        let cursor = Cursor {
+            char_index: char_index.min(self.text.len_chars()),
+        };
+        if !self.cursors.contains(&cursor) {
+            self.cursors.push(cursor);
+            self.cursors
+                .sort_unstable_by_key(|cursor| cursor.char_index);
+        }
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -137,5 +193,21 @@ mod tests {
         let mut buffer = Buffer::new();
         buffer.move_right();
         assert_eq!(buffer.cursor().char_index, 0);
+    }
+
+    #[test]
+    fn multi_cursor_edits_are_applied_atomically() {
+        let mut buffer = Buffer::new();
+        buffer.insert("abcd");
+        buffer.set_cursor(1);
+        buffer.add_cursor(3);
+        buffer.insert("X");
+        assert_eq!(buffer.text(), "aXbcXd");
+        assert_eq!(
+            buffer.cursors(),
+            &[Cursor { char_index: 2 }, Cursor { char_index: 5 }]
+        );
+        buffer.backspace();
+        assert_eq!(buffer.text(), "abcd");
     }
 }
