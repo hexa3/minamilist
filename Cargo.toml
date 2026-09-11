@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/apex-core",
+    "crates/apex-dap",
     "crates/apex-lsp",
     "crates/apex-syntax",
     "crates/apex-ui",
