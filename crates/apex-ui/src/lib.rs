@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
-use apex_core::Buffer as EditorBuffer;
+use apex_core::{Buffer as EditorBuffer, CommandId, CommandRegistry, ProjectIndex};
 use apex_syntax::{HighlightKind, Language, SyntaxDocument};
 use glyphon::{
     Attrs, Buffer as TextBuffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping,
@@ -62,6 +62,45 @@ impl Application {
         let Some(state) = self.window_state.as_mut() else {
             return;
         };
+
+        if self.modifiers.control_key()
+            && self.modifiers.shift_key()
+            && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("p"))
+        {
+            state.palette = Some(Palette::commands());
+            state.window.request_redraw();
+            return;
+        }
+        if self.modifiers.control_key()
+            && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("p"))
+        {
+            state.palette = Some(Palette::files());
+            state.window.request_redraw();
+            return;
+        }
+        if state.palette.is_some() {
+            match &event.logical_key {
+                Key::Named(NamedKey::Escape) => state.palette = None,
+                Key::Named(NamedKey::Backspace) => {
+                    state.palette.as_mut().expect("checked above").query.pop();
+                }
+                Key::Named(NamedKey::ArrowDown) => state.move_palette_selection(1),
+                Key::Named(NamedKey::ArrowUp) => state.move_palette_selection(-1),
+                Key::Named(NamedKey::Enter) => state.accept_palette(),
+                Key::Character(character)
+                    if !self.modifiers.control_key()
+                        && !self.modifiers.super_key()
+                        && !self.modifiers.alt_key() =>
+                {
+                    let palette = state.palette.as_mut().expect("checked above");
+                    palette.query.push_str(character);
+                    palette.selected = 0;
+                }
+                _ => return,
+            }
+            state.window.request_redraw();
+            return;
+        }
 
         match &event.logical_key {
             Key::Named(NamedKey::Backspace) => state.editor.backspace(),
@@ -143,6 +182,9 @@ struct WindowState {
     surface_config: SurfaceConfiguration,
     editor: EditorBuffer,
     syntax: Option<SyntaxDocument>,
+    commands: CommandRegistry,
+    project: Option<ProjectIndex>,
+    palette: Option<Palette>,
     font_system: FontSystem,
     swash_cache: SwashCache,
     viewport: Viewport,
@@ -213,6 +255,9 @@ impl WindowState {
             .path()
             .and_then(Language::from_path)
             .and_then(|language| SyntaxDocument::new(language, editor.text()).ok());
+        let project = std::env::current_dir()
+            .ok()
+            .and_then(|root| ProjectIndex::scan(root).ok());
         Self {
             instance,
             device,
@@ -221,6 +266,9 @@ impl WindowState {
             surface_config,
             editor,
             syntax,
+            commands: CommandRegistry::default(),
+            project,
+            palette: None,
             font_system,
             swash_cache: SwashCache::new(),
             viewport,
@@ -255,8 +303,117 @@ impl WindowState {
         }
     }
 
+    fn move_palette_selection(&mut self, delta: isize) {
+        let count = self.palette_items().len();
+        let Some(palette) = self.palette.as_mut() else {
+            return;
+        };
+        if count == 0 {
+            palette.selected = 0;
+        } else {
+            palette.selected = palette.selected.saturating_add_signed(delta).min(count - 1);
+        }
+    }
+
+    fn palette_items(&self) -> Vec<(String, Option<CommandId>)> {
+        let Some(palette) = self.palette.as_ref() else {
+            return Vec::new();
+        };
+        match palette.kind {
+            PaletteKind::Commands => self
+                .commands
+                .search(&palette.query)
+                .into_iter()
+                .take(8)
+                .map(|command| {
+                    let shortcut = command
+                        .shortcut
+                        .map_or(String::new(), |value| format!("  {value}"));
+                    (format!("{}{}", command.title, shortcut), Some(command.id))
+                })
+                .collect(),
+            PaletteKind::Files => self
+                .project
+                .as_ref()
+                .map(|project| {
+                    project
+                        .find_files(&palette.query, 8)
+                        .into_iter()
+                        .map(|entry| (entry.relative_path.display().to_string(), None))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    fn accept_palette(&mut self) {
+        let Some(palette) = self.palette.as_ref() else {
+            return;
+        };
+        let selected = palette.selected;
+        let kind = palette.kind;
+        let Some((label, command)) = self.palette_items().into_iter().nth(selected) else {
+            return;
+        };
+        self.palette = None;
+        match kind {
+            PaletteKind::Files => {
+                let Some(project) = self.project.as_ref() else {
+                    return;
+                };
+                match EditorBuffer::open(project.root().join(label)) {
+                    Ok(editor) => {
+                        self.editor = editor;
+                        self.syntax =
+                            self.editor
+                                .path()
+                                .and_then(Language::from_path)
+                                .and_then(|language| {
+                                    SyntaxDocument::new(language, self.editor.text()).ok()
+                                });
+                    }
+                    Err(error) => eprintln!("Apex: {error}"),
+                }
+            }
+            PaletteKind::Commands => match command {
+                Some(CommandId("file.save")) => {
+                    if let Err(error) = self.editor.save() {
+                        eprintln!("Apex: {error}");
+                    }
+                }
+                Some(CommandId("file.find")) => self.palette = Some(Palette::files()),
+                Some(CommandId("palette.open")) => self.palette = Some(Palette::commands()),
+                _ => {}
+            },
+        }
+        self.reset_blink();
+    }
+
+    fn palette_text(&self) -> Option<String> {
+        let palette = self.palette.as_ref()?;
+        let heading = match palette.kind {
+            PaletteKind::Commands => "COMMAND PALETTE",
+            PaletteKind::Files => "GO TO FILE",
+        };
+        let mut text = format!("{heading}\n> {}\n", palette.query);
+        for (index, (label, _)) in self.palette_items().into_iter().enumerate() {
+            let marker = if index == palette.selected {
+                "›"
+            } else {
+                " "
+            };
+            text.push_str(&format!("{marker} {label}\n"));
+        }
+        text.push_str("────────────────────────────────────────\n");
+        Some(text)
+    }
+
     fn display_text(&self) -> (String, Option<usize>) {
         let mut text = self.editor.text();
+        if let Some(palette) = self.palette_text() {
+            text.insert_str(0, &palette);
+            return (text, None);
+        }
         if (self.blink_started.elapsed().as_millis() / 500).is_multiple_of(2) {
             let byte_index = text
                 .char_indices()
@@ -271,7 +428,7 @@ impl WindowState {
     fn render(&mut self) {
         let (display_text, cursor_byte) = self.display_text();
         let default_attrs = Attrs::new().family(Family::Monospace);
-        if let Some(syntax) = self.syntax.as_ref() {
+        if let Some(syntax) = self.syntax.as_ref().filter(|_| self.palette.is_none()) {
             let spans = syntax.highlights();
             let rich_text = rich_text_segments(&display_text, &spans, cursor_byte);
             self.text_buffer
@@ -369,6 +526,37 @@ impl WindowState {
 
         // Continuous vsync redraw keeps the input-to-glyph path at display rate.
         self.window.request_redraw();
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PaletteKind {
+    Commands,
+    Files,
+}
+
+#[derive(Debug)]
+struct Palette {
+    kind: PaletteKind,
+    query: String,
+    selected: usize,
+}
+
+impl Palette {
+    fn commands() -> Self {
+        Self {
+            kind: PaletteKind::Commands,
+            query: String::new(),
+            selected: 0,
+        }
+    }
+
+    fn files() -> Self {
+        Self {
+            kind: PaletteKind::Files,
+            query: String::new(),
+            selected: 0,
+        }
     }
 }
 
