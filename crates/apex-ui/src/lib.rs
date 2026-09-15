@@ -7,6 +7,7 @@ mod python;
 use anyhow::{Context, Result};
 use apex_core::{Buffer as EditorBuffer, CommandId, CommandRegistry, ProjectIndex};
 use apex_syntax::{HighlightKind, Language, SyntaxDocument};
+use arboard::Clipboard;
 use glyphon::{
     Attrs, Buffer as TextBuffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
@@ -52,6 +53,7 @@ struct Application {
     project_root: PathBuf,
     window_state: Option<WindowState>,
     modifiers: ModifiersState,
+    mouse_selecting: bool,
 }
 
 impl Application {
@@ -61,6 +63,7 @@ impl Application {
             project_root,
             window_state: None,
             modifiers: ModifiersState::default(),
+            mouse_selecting: false,
         }
     }
 
@@ -91,7 +94,13 @@ impl Application {
         if primary
             && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("o"))
         {
-            state.palette = Some(Palette::files());
+            state.open_dialog();
+            return;
+        }
+        if primary
+            && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("f"))
+        {
+            state.palette = Some(Palette::search());
             state.window.request_redraw();
             return;
         }
@@ -108,6 +117,9 @@ impl Application {
                     let palette = state.palette.as_mut().expect("checked above");
                     palette.query.push(' ');
                     palette.selected = 0;
+                }
+                Key::Character(character) if primary && character.eq_ignore_ascii_case("v") => {
+                    state.paste_into_palette();
                 }
                 Key::Character(character) if !primary && !self.modifiers.alt_key() => {
                     let palette = state.palette.as_mut().expect("checked above");
@@ -133,6 +145,46 @@ impl Application {
         {
             state.run_python();
             return;
+        }
+
+        if primary
+            && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("a"))
+        {
+            state.editor.select_all();
+            state.window.request_redraw();
+            return;
+        }
+        if primary
+            && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("c"))
+        {
+            state.copy_selection(false);
+            return;
+        }
+        if primary
+            && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("x"))
+        {
+            state.copy_selection(true);
+            return;
+        }
+        if primary
+            && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("v"))
+        {
+            state.paste();
+            return;
+        }
+
+        if matches!(
+            event.logical_key,
+            Key::Named(
+                NamedKey::ArrowLeft
+                    | NamedKey::ArrowRight
+                    | NamedKey::ArrowUp
+                    | NamedKey::ArrowDown
+                    | NamedKey::Home
+                    | NamedKey::End
+            )
+        ) {
+            state.editor.prepare_selection(self.modifiers.shift_key());
         }
         if primary
             && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("j"))
@@ -175,10 +227,13 @@ impl Application {
             {
                 state.editor.redo();
             }
+            Key::Character(character)
+                if primary && self.modifiers.shift_key() && character.eq_ignore_ascii_case("s") =>
+            {
+                state.save_as_dialog();
+            }
             Key::Character(character) if primary && character.eq_ignore_ascii_case("s") => {
-                if let Err(error) = state.editor.save() {
-                    eprintln!("{PRODUCT_NAME}: {error}");
-                }
+                state.save_current();
             }
             Key::Character(character) if !primary && !self.modifiers.alt_key() => {
                 state.editor.insert(character);
@@ -222,12 +277,23 @@ impl ApplicationHandler for Application {
         event: WindowEvent,
     ) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                let should_close = self
+                    .window_state
+                    .as_mut()
+                    .is_none_or(WindowState::confirm_close);
+                if should_close {
+                    event_loop.exit();
+                }
+            }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::KeyboardInput { event, .. } => self.handle_key(&event),
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(state) = self.window_state.as_mut() {
                     state.pointer = position;
+                    if self.mouse_selecting {
+                        state.place_cursor_from_pointer(true);
+                    }
                 }
             }
             WindowEvent::MouseInput {
@@ -235,10 +301,16 @@ impl ApplicationHandler for Application {
                 button: MouseButton::Left,
                 ..
             } => {
+                self.mouse_selecting = true;
                 if let Some(state) = self.window_state.as_mut() {
-                    state.place_cursor_from_pointer();
+                    state.place_cursor_from_pointer(self.modifiers.shift_key());
                 }
             }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => self.mouse_selecting = false,
             WindowEvent::MouseWheel { delta, .. } => {
                 if let Some(state) = self.window_state.as_mut() {
                     state.scroll(delta);
@@ -281,6 +353,7 @@ struct WindowState {
     show_output: bool,
     output_scroll_line: usize,
     python_run: Option<PythonRun>,
+    clipboard: Option<Clipboard>,
     blink_started: Instant,
     scroll_line: usize,
     pointer: PhysicalPosition<f64>,
@@ -378,6 +451,7 @@ impl WindowState {
             show_output: false,
             output_scroll_line: 0,
             python_run: None,
+            clipboard: Clipboard::new().ok(),
             blink_started: Instant::now(),
             scroll_line: 0,
             pointer: PhysicalPosition::new(0.0, 0.0),
@@ -452,7 +526,7 @@ impl WindowState {
         self.window.request_redraw();
     }
 
-    fn place_cursor_from_pointer(&mut self) {
+    fn place_cursor_from_pointer(&mut self, extend_selection: bool) {
         if self.palette.is_some()
             || self.pointer.x < 16.0
             || self.pointer.y < 16.0
@@ -489,7 +563,8 @@ impl WindowState {
         while byte > 0 && !source.is_char_boundary(byte) {
             byte -= 1;
         }
-        self.editor.set_cursor(source[..byte].chars().count());
+        self.editor
+            .set_cursor_with_selection(source[..byte].chars().count(), extend_selection);
         self.reset_blink();
         self.update_title();
         self.window.request_redraw();
@@ -514,6 +589,204 @@ impl WindowState {
             line + 1,
             column + 1
         ));
+    }
+
+    fn find_next(&mut self, query: &str) {
+        if query.is_empty() {
+            return;
+        }
+        let source = self.editor.text();
+        let cursor_byte = source
+            .char_indices()
+            .nth(self.editor.cursor().char_index)
+            .map_or(source.len(), |(byte, _)| byte);
+        let found = find_next_byte(&source, query, cursor_byte);
+        let Some(start_byte) = found else {
+            self.show_error(format!("No matches for “{query}”."));
+            return;
+        };
+        let start = source[..start_byte].chars().count();
+        let end = start + query.chars().count();
+        self.editor.select_range(start..end);
+        self.reveal_cursor();
+        self.update_title();
+        self.window.request_redraw();
+    }
+
+    fn paste_into_palette(&mut self) {
+        let text = self
+            .clipboard
+            .as_mut()
+            .and_then(|clipboard| clipboard.get_text().ok());
+        if let Some(text) = text
+            && let Some(palette) = self.palette.as_mut()
+        {
+            palette.query.push_str(&text.replace(['\r', '\n'], " "));
+            palette.selected = 0;
+        }
+    }
+
+    fn copy_selection(&mut self, cut: bool) {
+        let Some(text) = self.editor.selected_text() else {
+            return;
+        };
+        let copied = self
+            .clipboard
+            .as_mut()
+            .is_some_and(|clipboard| clipboard.set_text(text).is_ok());
+        if copied && cut {
+            self.editor.delete_selection();
+            self.sync_syntax();
+            self.update_title();
+            self.window.request_redraw();
+        } else if !copied {
+            self.output = "The system clipboard is unavailable.".into();
+            self.show_output = true;
+            self.resize_text_buffers();
+            self.window.request_redraw();
+        }
+    }
+
+    fn paste(&mut self) {
+        match self
+            .clipboard
+            .as_mut()
+            .and_then(|clipboard| clipboard.get_text().ok())
+        {
+            Some(text) => {
+                self.editor.insert(&text.replace("\r\n", "\n"));
+                self.sync_syntax();
+                self.reveal_cursor();
+                self.update_title();
+            }
+            None => {
+                self.output = "The system clipboard contains no text or is unavailable.".into();
+                self.show_output = true;
+                self.resize_text_buffers();
+            }
+        }
+        self.window.request_redraw();
+    }
+
+    fn show_error(&mut self, message: impl Into<String>) {
+        self.output = message.into();
+        self.show_output = true;
+        self.resize_text_buffers();
+        self.window.request_redraw();
+    }
+
+    fn save_current(&mut self) -> bool {
+        if self.editor.path().is_none() {
+            return self.save_as_dialog();
+        }
+        match self.editor.save() {
+            Ok(()) => {
+                self.update_title();
+                true
+            }
+            Err(error) => {
+                self.show_error(format!("Could not save the file:\n{error}"));
+                false
+            }
+        }
+    }
+
+    fn save_as_dialog(&mut self) -> bool {
+        let directory = self
+            .project
+            .as_ref()
+            .map(|project| project.root())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let file_name = self
+            .editor
+            .path()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("untitled.py");
+        let selected = rfd::FileDialog::new()
+            .set_parent(self.window.as_ref())
+            .set_title("Save file")
+            .set_directory(directory)
+            .set_file_name(file_name)
+            .add_filter("Python", &["py", "pyw"])
+            .add_filter("Text", &["txt", "md", "toml", "json"])
+            .save_file();
+        let Some(path) = selected else {
+            return false;
+        };
+        match self.editor.save_as(&path) {
+            Ok(()) => {
+                self.syntax = Language::from_path(&path)
+                    .and_then(|language| SyntaxDocument::new(language, self.editor.text()).ok());
+                self.update_title();
+                true
+            }
+            Err(error) => {
+                self.show_error(format!("Could not save {}:\n{error}", path.display()));
+                false
+            }
+        }
+    }
+
+    fn confirm_close(&mut self) -> bool {
+        if !self.editor.is_dirty() {
+            return true;
+        }
+        let file = self
+            .editor
+            .path()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("untitled");
+        match rfd::MessageDialog::new()
+            .set_parent(self.window.as_ref())
+            .set_title("Unsaved changes")
+            .set_description(format!("Save changes to {file}?"))
+            .set_level(rfd::MessageLevel::Warning)
+            .set_buttons(rfd::MessageButtons::YesNoCancel)
+            .show()
+        {
+            rfd::MessageDialogResult::Yes => self.save_current(),
+            rfd::MessageDialogResult::No => true,
+            rfd::MessageDialogResult::Cancel
+            | rfd::MessageDialogResult::Ok
+            | rfd::MessageDialogResult::Custom(_) => false,
+        }
+    }
+
+    fn open_dialog(&mut self) {
+        if !self.confirm_close() {
+            return;
+        }
+        let directory = self
+            .project
+            .as_ref()
+            .map(|project| project.root())
+            .unwrap_or_else(|| std::path::Path::new("."));
+        let selected = rfd::FileDialog::new()
+            .set_parent(self.window.as_ref())
+            .set_title("Open file")
+            .set_directory(directory)
+            .add_filter(
+                "Source code",
+                &["py", "pyw", "rs", "js", "ts", "go", "c", "cpp"],
+            )
+            .add_filter("Text", &["txt", "md", "toml", "json", "yaml", "yml"])
+            .pick_file();
+        let Some(path) = selected else {
+            return;
+        };
+        match EditorBuffer::open(&path) {
+            Ok(editor) => {
+                self.editor = editor;
+                self.syntax = Language::from_path(&path)
+                    .and_then(|language| SyntaxDocument::new(language, self.editor.text()).ok());
+                self.scroll_line = 0;
+                self.update_title();
+                self.window.request_redraw();
+            }
+            Err(error) => self.show_error(format!("Could not open {}:\n{error}", path.display())),
+        }
     }
 
     fn run_python(&mut self) {
@@ -673,6 +946,14 @@ impl WindowState {
                         .collect()
                 })
                 .unwrap_or_default(),
+            PaletteKind::Search => {
+                let label = if palette.query.is_empty() {
+                    "Type text to find".into()
+                } else {
+                    format!("Find next “{}”", palette.query)
+                };
+                vec![(label, None)]
+            }
         }
     }
 
@@ -682,12 +963,16 @@ impl WindowState {
         };
         let selected = palette.selected;
         let kind = palette.kind;
+        let query = palette.query.clone();
         let Some((label, command)) = self.palette_items().into_iter().nth(selected) else {
             return;
         };
         self.palette = None;
         match kind {
             PaletteKind::Files => {
+                if !self.confirm_close() {
+                    return;
+                }
                 let Some(project) = self.project.as_ref() else {
                     return;
                 };
@@ -707,13 +992,13 @@ impl WindowState {
             }
             PaletteKind::Commands => match command {
                 Some(CommandId("file.save")) => {
-                    if let Err(error) = self.editor.save() {
-                        eprintln!("{PRODUCT_NAME}: {error}");
-                    }
+                    self.save_current();
                 }
-                Some(CommandId("file.open" | "file.find")) => {
-                    self.palette = Some(Palette::files());
+                Some(CommandId("file.save_as")) => {
+                    self.save_as_dialog();
                 }
+                Some(CommandId("file.open")) => self.open_dialog(),
+                Some(CommandId("file.find")) => self.palette = Some(Palette::files()),
                 Some(CommandId("palette.open")) => self.palette = Some(Palette::commands()),
                 Some(CommandId("editor.undo")) => {
                     self.editor.undo();
@@ -723,6 +1008,11 @@ impl WindowState {
                     self.editor.redo();
                     self.sync_syntax();
                 }
+                Some(CommandId("editor.find")) => self.palette = Some(Palette::search()),
+                Some(CommandId("editor.select_all")) => self.editor.select_all(),
+                Some(CommandId("editor.copy")) => self.copy_selection(false),
+                Some(CommandId("editor.cut")) => self.copy_selection(true),
+                Some(CommandId("editor.paste")) => self.paste(),
                 Some(CommandId("python.run")) => self.run_python(),
                 Some(CommandId("python.stop")) => self.stop_python(),
                 Some(CommandId("output.toggle")) => {
@@ -732,6 +1022,7 @@ impl WindowState {
                 Some(CommandId("output.clear")) => self.output.clear(),
                 _ => {}
             },
+            PaletteKind::Search => self.find_next(&query),
         }
         self.reset_blink();
         self.update_title();
@@ -742,6 +1033,7 @@ impl WindowState {
         let heading = match palette.kind {
             PaletteKind::Commands => "COMMAND PALETTE",
             PaletteKind::Files => "GO TO FILE",
+            PaletteKind::Search => "FIND IN FILE",
         };
         let mut text = format!("{heading}\n> {}\n", palette.query);
         for (index, (label, _)) in self.palette_items().into_iter().enumerate() {
@@ -778,9 +1070,21 @@ impl WindowState {
         let (display_text, cursor_byte) = self.display_text();
         self.rendered_cursor_byte = cursor_byte;
         let default_attrs = Attrs::new().family(Family::Monospace);
-        if let Some(syntax) = self.syntax.as_ref().filter(|_| self.palette.is_none()) {
-            let spans = syntax.highlights();
-            let rich_text = rich_text_segments(&display_text, &spans, cursor_byte);
+        let source_text = self.editor.text();
+        if self.palette.is_none()
+            && (self.syntax.is_some() || self.editor.selection_range().is_some())
+        {
+            let spans = self
+                .syntax
+                .as_ref()
+                .map_or_else(Vec::new, SyntaxDocument::highlights);
+            let rich_text = rich_text_segments(
+                &display_text,
+                &source_text,
+                &spans,
+                cursor_byte,
+                self.editor.selection_range(),
+            );
             self.text_buffer
                 .set_rich_text(rich_text, &default_attrs, Shaping::Advanced, None);
         } else {
@@ -929,6 +1233,7 @@ impl WindowState {
 enum PaletteKind {
     Commands,
     Files,
+    Search,
 }
 
 #[derive(Debug)]
@@ -954,50 +1259,83 @@ impl Palette {
             selected: 0,
         }
     }
+
+    fn search() -> Self {
+        Self {
+            kind: PaletteKind::Search,
+            query: String::new(),
+            selected: 0,
+        }
+    }
 }
 
 fn rich_text_segments<'text>(
     text: &'text str,
+    source: &str,
     spans: &[apex_syntax::HighlightSpan],
     cursor_byte: Option<usize>,
+    selection: Option<std::ops::Range<usize>>,
 ) -> Vec<(&'text str, Attrs<'static>)> {
     const CURSOR_LEN: usize = '│'.len_utf8();
-    let mut segments = Vec::with_capacity(spans.len() * 2 + 1);
-    let mut consumed = 0;
-    for span in spans {
-        let mut start = span.bytes.start;
-        let mut end = span.bytes.end;
-        if let Some(cursor) = cursor_byte {
-            if cursor <= start {
-                start += CURSOR_LEN;
-                end += CURSOR_LEN;
-            } else if cursor < end {
-                end += CURSOR_LEN;
-            }
+    let adjust = |byte: usize| {
+        if cursor_byte.is_some_and(|cursor| cursor <= byte) {
+            byte + CURSOR_LEN
+        } else {
+            byte
         }
-        if start < consumed
-            || end > text.len()
-            || !text.is_char_boundary(start)
-            || !text.is_char_boundary(end)
-        {
+    };
+    let adjusted_spans: Vec<_> = spans
+        .iter()
+        .filter_map(|span| {
+            let start = adjust(span.bytes.start);
+            let end = adjust(span.bytes.end);
+            (start <= end && end <= text.len()).then_some((start, end, span.kind))
+        })
+        .collect();
+    let selected_bytes = selection.map(|selection| {
+        let start = source
+            .char_indices()
+            .nth(selection.start)
+            .map_or(source.len(), |(byte, _)| byte);
+        let end = source
+            .char_indices()
+            .nth(selection.end)
+            .map_or(source.len(), |(byte, _)| byte);
+        adjust(start)..adjust(end)
+    });
+    let mut boundaries = vec![0, text.len()];
+    for (start, end, _) in &adjusted_spans {
+        boundaries.extend([*start, *end]);
+    }
+    if let Some(selection) = &selected_bytes {
+        boundaries.extend([selection.start, selection.end]);
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    let mut segments = Vec::with_capacity(boundaries.len());
+    for boundary in boundaries.windows(2) {
+        let (start, end) = (boundary[0], boundary[1]);
+        if start == end || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
             continue;
         }
-        if consumed < start {
-            segments.push((
-                &text[consumed..start],
-                Attrs::new().family(Family::Monospace),
-            ));
+        let mut attrs = Attrs::new().family(Family::Monospace);
+        if let Some((_, _, kind)) = adjusted_spans
+            .iter()
+            .find(|(span_start, span_end, _)| start >= *span_start && start < *span_end)
+        {
+            attrs = attrs.color(highlight_color(*kind));
         }
-        segments.push((
-            &text[start..end],
-            Attrs::new()
-                .family(Family::Monospace)
-                .color(highlight_color(span.kind)),
-        ));
-        consumed = end;
-    }
-    if consumed < text.len() {
-        segments.push((&text[consumed..], Attrs::new().family(Family::Monospace)));
+        if selected_bytes
+            .as_ref()
+            .is_some_and(|selection| start >= selection.start && start < selection.end)
+        {
+            attrs = attrs
+                .color(Color::rgb(245, 248, 255))
+                .underline(glyphon::cosmic_text::UnderlineStyle::Single)
+                .underline_color(Color::rgb(92, 185, 255));
+        }
+        segments.push((&text[start..end], attrs));
     }
     if segments.is_empty() {
         segments.push((text, Attrs::new().family(Family::Monospace)));
@@ -1013,5 +1351,29 @@ fn highlight_color(kind: HighlightKind) -> Color {
         HighlightKind::Keyword => Color::rgb(197, 134, 192),
         HighlightKind::Function => Color::rgb(220, 220, 170),
         HighlightKind::Type => Color::rgb(78, 201, 176),
+    }
+}
+
+fn find_next_byte(source: &str, query: &str, from: usize) -> Option<usize> {
+    let mut from = from.min(source.len());
+    while !source.is_char_boundary(from) {
+        from -= 1;
+    }
+    source[from..]
+        .find(query)
+        .map(|offset| from + offset)
+        .or_else(|| source[..from].find(query))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_finds_forward_then_wraps() {
+        let source = "one 🦀 two 🦀";
+        assert_eq!(find_next_byte(source, "🦀", 0), Some(4));
+        assert_eq!(find_next_byte(source, "one", 4), Some(0));
+        assert_eq!(find_next_byte(source, "missing", 0), None);
     }
 }

@@ -9,7 +9,9 @@ rust-version.workspace = true
 apex-core = { path = "../apex-core" }
 apex-syntax = { path = "../apex-syntax" }
 anyhow.workspace = true
+arboard.workspace = true
 glyphon.workspace = true
 pollster.workspace = true
+rfd.workspace = true
 wgpu.workspace = true
 winit.workspace = true

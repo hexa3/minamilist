@@ -35,6 +35,11 @@ impl CommandRegistry {
                 shortcut: Some("Ctrl+S"),
             },
             Command {
+                id: CommandId("file.save_as"),
+                title: "File: Save As",
+                shortcut: Some("Ctrl+Shift+S"),
+            },
+            Command {
                 id: CommandId("file.find"),
                 title: "Go to File",
                 shortcut: Some("Ctrl+P"),
@@ -53,6 +58,31 @@ impl CommandRegistry {
                 id: CommandId("editor.redo"),
                 title: "Edit: Redo",
                 shortcut: Some("Ctrl+Shift+Z"),
+            },
+            Command {
+                id: CommandId("editor.find"),
+                title: "Edit: Find",
+                shortcut: Some("Ctrl+F"),
+            },
+            Command {
+                id: CommandId("editor.select_all"),
+                title: "Edit: Select All",
+                shortcut: Some("Ctrl+A"),
+            },
+            Command {
+                id: CommandId("editor.copy"),
+                title: "Edit: Copy",
+                shortcut: Some("Ctrl+C"),
+            },
+            Command {
+                id: CommandId("editor.cut"),
+                title: "Edit: Cut",
+                shortcut: Some("Ctrl+X"),
+            },
+            Command {
+                id: CommandId("editor.paste"),
+                title: "Edit: Paste",
+                shortcut: Some("Ctrl+V"),
             },
             Command {
                 id: CommandId("python.run"),

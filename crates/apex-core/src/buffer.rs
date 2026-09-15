@@ -1,5 +1,6 @@
 use std::{
     fs, io,
+    ops::Range,
     path::{Path, PathBuf},
 };
 
@@ -15,6 +16,7 @@ pub struct Cursor {
 pub struct Buffer {
     text: Rope,
     cursors: Vec<Cursor>,
+    selection_anchor: Option<usize>,
     path: Option<PathBuf>,
     dirty: bool,
     undo_stack: Vec<Snapshot>,
@@ -25,6 +27,7 @@ pub struct Buffer {
 struct Snapshot {
     text: Rope,
     cursors: Vec<Cursor>,
+    selection_anchor: Option<usize>,
     dirty: bool,
 }
 
@@ -51,6 +54,7 @@ impl Buffer {
         Self {
             text: Rope::new(),
             cursors: vec![Cursor::default()],
+            selection_anchor: None,
             path: None,
             dirty: false,
             undo_stack: Vec::new(),
@@ -62,6 +66,7 @@ impl Buffer {
         Self {
             text: Rope::from_str(text.as_ref()),
             cursors: vec![Cursor::default()],
+            selection_anchor: None,
             path: None,
             dirty: false,
             undo_stack: Vec::new(),
@@ -89,6 +94,7 @@ impl Buffer {
         Ok(Self {
             text,
             cursors: vec![Cursor::default()],
+            selection_anchor: None,
             path: Some(path),
             dirty: false,
             undo_stack: Vec::new(),
@@ -98,6 +104,17 @@ impl Buffer {
 
     pub fn insert(&mut self, text: &str) {
         if text.is_empty() {
+            return;
+        }
+        if let Some(selection) = self.selection_range() {
+            self.checkpoint();
+            self.text.remove(selection.clone());
+            self.text.insert(selection.start, text);
+            self.cursors = vec![Cursor {
+                char_index: selection.start + text.chars().count(),
+            }];
+            self.selection_anchor = None;
+            self.dirty = true;
             return;
         }
         self.checkpoint();
@@ -120,9 +137,13 @@ impl Buffer {
             cursor.char_index += inserted * preceding;
         }
         self.dirty = true;
+        self.selection_anchor = None;
     }
 
     pub fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         let mut positions: Vec<usize> = self
             .cursors
             .iter()
@@ -145,9 +166,13 @@ impl Buffer {
             cursor.char_index = cursor.char_index.saturating_sub(removed_before);
         }
         self.dirty = true;
+        self.selection_anchor = None;
     }
 
     pub fn delete_forward(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         let mut positions: Vec<usize> = self
             .cursors
             .iter()
@@ -171,6 +196,7 @@ impl Buffer {
             cursor.char_index = cursor.char_index.saturating_sub(removed_before);
         }
         self.dirty = true;
+        self.selection_anchor = None;
     }
 
     pub fn move_left(&mut self) {
@@ -307,6 +333,15 @@ impl Buffer {
     }
 
     pub fn set_cursor(&mut self, char_index: usize) {
+        self.set_cursor_with_selection(char_index, false);
+    }
+
+    pub fn set_cursor_with_selection(&mut self, char_index: usize, extend: bool) {
+        if extend && self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor().char_index);
+        } else if !extend {
+            self.selection_anchor = None;
+        }
         self.cursors.clear();
         self.cursors.push(Cursor {
             char_index: char_index.min(self.text.len_chars()),
@@ -314,6 +349,7 @@ impl Buffer {
     }
 
     pub fn add_cursor(&mut self, char_index: usize) {
+        self.selection_anchor = None;
         let cursor = Cursor {
             char_index: char_index.min(self.text.len_chars()),
         };
@@ -326,6 +362,55 @@ impl Buffer {
 
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    pub fn prepare_selection(&mut self, extend: bool) {
+        if extend {
+            let cursor = self.cursor().char_index;
+            self.selection_anchor.get_or_insert(cursor);
+        } else {
+            self.selection_anchor = None;
+        }
+    }
+
+    pub fn select_all(&mut self) {
+        self.cursors = vec![Cursor {
+            char_index: self.text.len_chars(),
+        }];
+        self.selection_anchor = Some(0);
+    }
+
+    pub fn select_range(&mut self, selection: Range<usize>) {
+        let end = self.text.len_chars();
+        let start = selection.start.min(end);
+        let finish = selection.end.min(end).max(start);
+        self.selection_anchor = Some(start);
+        self.cursors = vec![Cursor { char_index: finish }];
+    }
+
+    pub fn selection_range(&self) -> Option<Range<usize>> {
+        let anchor = self.selection_anchor?;
+        let cursor = self.cursor().char_index;
+        (anchor != cursor).then(|| anchor.min(cursor)..anchor.max(cursor))
+    }
+
+    pub fn selected_text(&self) -> Option<String> {
+        self.selection_range()
+            .map(|selection| self.text.slice(selection).to_string())
+    }
+
+    pub fn delete_selection(&mut self) -> bool {
+        let Some(selection) = self.selection_range() else {
+            return false;
+        };
+        self.checkpoint();
+        self.text.remove(selection.clone());
+        self.cursors = vec![Cursor {
+            char_index: selection.start,
+        }];
+        self.selection_anchor = None;
+        self.dirty = true;
+        true
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -402,6 +487,7 @@ impl Buffer {
         Snapshot {
             text: self.text.clone(),
             cursors: self.cursors.clone(),
+            selection_anchor: self.selection_anchor,
             dirty: self.dirty,
         }
     }
@@ -409,6 +495,7 @@ impl Buffer {
     fn restore(&mut self, snapshot: Snapshot) {
         self.text = snapshot.text;
         self.cursors = snapshot.cursors;
+        self.selection_anchor = snapshot.selection_anchor;
         self.dirty = snapshot.dirty;
     }
 }
@@ -563,5 +650,38 @@ mod tests {
         assert_eq!(buffer.path(), Some(path.as_path()));
         assert!(!buffer.is_dirty());
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn selection_supports_copy_replace_delete_and_undo() {
+        let mut buffer = Buffer::from_text("alpha beta");
+        buffer.set_cursor(5);
+        buffer.prepare_selection(true);
+        buffer.move_to_document_end();
+        assert_eq!(buffer.selection_range(), Some(5..10));
+        assert_eq!(buffer.selected_text().as_deref(), Some(" beta"));
+        buffer.insert(" gamma");
+        assert_eq!(buffer.text(), "alpha gamma");
+        assert_eq!(buffer.selection_range(), None);
+        assert!(buffer.undo());
+        assert_eq!(buffer.text(), "alpha beta");
+        assert_eq!(buffer.selection_range(), Some(5..10));
+        assert!(buffer.delete_selection());
+        assert_eq!(buffer.text(), "alpha");
+    }
+
+    #[test]
+    fn select_all_covers_unicode_text() {
+        let mut buffer = Buffer::from_text("hello 🦀");
+        buffer.select_all();
+        assert_eq!(buffer.selected_text().as_deref(), Some("hello 🦀"));
+    }
+
+    #[test]
+    fn explicit_selection_is_clamped_to_the_buffer() {
+        let mut buffer = Buffer::from_text("abc");
+        buffer.select_range(1..100);
+        assert_eq!(buffer.selection_range(), Some(1..3));
+        assert_eq!(buffer.selected_text().as_deref(), Some("bc"));
     }
 }
