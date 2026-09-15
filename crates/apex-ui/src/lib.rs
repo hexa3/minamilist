@@ -104,10 +104,29 @@ impl Application {
 
         match &event.logical_key {
             Key::Named(NamedKey::Backspace) => state.editor.backspace(),
+            Key::Named(NamedKey::Delete) => state.editor.delete_forward(),
             Key::Named(NamedKey::ArrowLeft) => state.editor.move_left(),
             Key::Named(NamedKey::ArrowRight) => state.editor.move_right(),
+            Key::Named(NamedKey::ArrowUp) => state.editor.move_up(),
+            Key::Named(NamedKey::ArrowDown) => state.editor.move_down(),
+            Key::Named(NamedKey::Home) => state.editor.move_to_line_start(),
+            Key::Named(NamedKey::End) => state.editor.move_to_line_end(),
             Key::Named(NamedKey::Enter) => state.editor.insert("\n"),
             Key::Named(NamedKey::Tab) => state.editor.insert("    "),
+            Key::Character(character)
+                if self.modifiers.control_key()
+                    && !self.modifiers.shift_key()
+                    && character.eq_ignore_ascii_case("z") =>
+            {
+                state.editor.undo();
+            }
+            Key::Character(character)
+                if self.modifiers.control_key()
+                    && (self.modifiers.shift_key() && character.eq_ignore_ascii_case("z")
+                        || character.eq_ignore_ascii_case("y")) =>
+            {
+                state.editor.redo();
+            }
             Key::Character(character)
                 if self.modifiers.control_key() && character.eq_ignore_ascii_case("s") =>
             {

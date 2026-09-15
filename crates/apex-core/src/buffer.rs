@@ -17,6 +17,15 @@ pub struct Buffer {
     cursors: Vec<Cursor>,
     path: Option<PathBuf>,
     dirty: bool,
+    undo_stack: Vec<Snapshot>,
+    redo_stack: Vec<Snapshot>,
+}
+
+#[derive(Clone, Debug)]
+struct Snapshot {
+    text: Rope,
+    cursors: Vec<Cursor>,
+    dirty: bool,
 }
 
 #[derive(Debug, Error)]
@@ -42,6 +51,8 @@ impl Buffer {
             cursors: vec![Cursor::default()],
             path: None,
             dirty: false,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -51,6 +62,8 @@ impl Buffer {
             cursors: vec![Cursor::default()],
             path: None,
             dirty: false,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -69,10 +82,16 @@ impl Buffer {
             cursors: vec![Cursor::default()],
             path: Some(path),
             dirty: false,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         })
     }
 
     pub fn insert(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.checkpoint();
         let inserted = text.chars().count();
         let mut positions: Vec<usize> = self
             .cursors
@@ -105,6 +124,33 @@ impl Buffer {
         if positions.is_empty() {
             return;
         }
+        self.checkpoint();
+        for position in positions.iter().rev() {
+            self.text.remove(*position..*position + 1);
+        }
+        for cursor in &mut self.cursors {
+            let removed_before = positions
+                .iter()
+                .filter(|position| **position < cursor.char_index)
+                .count();
+            cursor.char_index = cursor.char_index.saturating_sub(removed_before);
+        }
+        self.dirty = true;
+    }
+
+    pub fn delete_forward(&mut self) {
+        let mut positions: Vec<usize> = self
+            .cursors
+            .iter()
+            .map(|cursor| cursor.char_index)
+            .filter(|position| *position < self.text.len_chars())
+            .collect();
+        positions.sort_unstable();
+        positions.dedup();
+        if positions.is_empty() {
+            return;
+        }
+        self.checkpoint();
         for position in positions.iter().rev() {
             self.text.remove(*position..*position + 1);
         }
@@ -128,6 +174,69 @@ impl Buffer {
         for cursor in &mut self.cursors {
             cursor.char_index = (cursor.char_index + 1).min(self.text.len_chars());
         }
+    }
+
+    pub fn move_up(&mut self) {
+        let text = &self.text;
+        for cursor in &mut self.cursors {
+            let line = text.char_to_line(cursor.char_index);
+            if line == 0 {
+                continue;
+            }
+            let column = cursor.char_index - text.line_to_char(line);
+            let target_line = line - 1;
+            cursor.char_index =
+                text.line_to_char(target_line) + column.min(line_content_len(text, target_line));
+        }
+    }
+
+    pub fn move_down(&mut self) {
+        let text = &self.text;
+        for cursor in &mut self.cursors {
+            let line = text.char_to_line(cursor.char_index);
+            if line + 1 >= text.len_lines() {
+                continue;
+            }
+            let column = cursor.char_index - text.line_to_char(line);
+            let target_line = line + 1;
+            cursor.char_index =
+                text.line_to_char(target_line) + column.min(line_content_len(text, target_line));
+        }
+    }
+
+    pub fn move_to_line_start(&mut self) {
+        let text = &self.text;
+        for cursor in &mut self.cursors {
+            cursor.char_index = text.line_to_char(text.char_to_line(cursor.char_index));
+        }
+    }
+
+    pub fn move_to_line_end(&mut self) {
+        let text = &self.text;
+        for cursor in &mut self.cursors {
+            let line = text.char_to_line(cursor.char_index);
+            cursor.char_index = text.line_to_char(line) + line_content_len(text, line);
+        }
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(snapshot) = self.undo_stack.pop() else {
+            return false;
+        };
+        let current = self.snapshot();
+        self.restore(snapshot);
+        self.redo_stack.push(current);
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(snapshot) = self.redo_stack.pop() else {
+            return false;
+        };
+        let current = self.snapshot();
+        self.restore(snapshot);
+        self.undo_stack.push(current);
+        true
     }
 
     pub fn text(&self) -> String {
@@ -186,6 +295,41 @@ impl Buffer {
         self.dirty = false;
         Ok(())
     }
+
+    fn checkpoint(&mut self) {
+        const HISTORY_LIMIT: usize = 1_000;
+        if self.undo_stack.len() == HISTORY_LIMIT {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(self.snapshot());
+        self.redo_stack.clear();
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            text: self.text.clone(),
+            cursors: self.cursors.clone(),
+            dirty: self.dirty,
+        }
+    }
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        self.text = snapshot.text;
+        self.cursors = snapshot.cursors;
+        self.dirty = snapshot.dirty;
+    }
+}
+
+fn line_content_len(text: &Rope, line: usize) -> usize {
+    let slice = text.line(line);
+    let mut length = slice.len_chars();
+    if length > 0 && slice.char(length - 1) == '\n' {
+        length -= 1;
+        if length > 0 && slice.char(length - 1) == '\r' {
+            length -= 1;
+        }
+    }
+    length
 }
 
 #[cfg(test)]
@@ -222,5 +366,49 @@ mod tests {
         );
         buffer.backspace();
         assert_eq!(buffer.text(), "abcd");
+    }
+
+    #[test]
+    fn undo_and_redo_restore_text_cursors_and_dirty_state() {
+        let mut buffer = Buffer::from_text("one");
+        buffer.set_cursor(3);
+        buffer.insert(" two");
+        assert!(buffer.is_dirty());
+        assert!(buffer.undo());
+        assert_eq!(buffer.text(), "one");
+        assert_eq!(buffer.cursor().char_index, 3);
+        assert!(!buffer.is_dirty());
+        assert!(buffer.redo());
+        assert_eq!(buffer.text(), "one two");
+        assert!(buffer.is_dirty());
+    }
+
+    #[test]
+    fn vertical_navigation_clamps_to_shorter_lines() {
+        let mut buffer = Buffer::from_text("alpha\nx\nomega");
+        buffer.set_cursor(4);
+        buffer.move_down();
+        assert_eq!(buffer.cursor().char_index, 7);
+        buffer.move_down();
+        assert_eq!(buffer.cursor().char_index, 9);
+        buffer.move_to_line_end();
+        assert_eq!(buffer.cursor().char_index, buffer.len_chars());
+        buffer.move_to_line_start();
+        assert_eq!(buffer.cursor().char_index, 8);
+        buffer.move_up();
+        assert_eq!(buffer.cursor().char_index, 6);
+    }
+
+    #[test]
+    fn forward_delete_handles_multiple_cursors() {
+        let mut buffer = Buffer::from_text("abcd");
+        buffer.set_cursor(0);
+        buffer.add_cursor(2);
+        buffer.delete_forward();
+        assert_eq!(buffer.text(), "bd");
+        assert_eq!(
+            buffer.cursors(),
+            &[Cursor { char_index: 0 }, Cursor { char_index: 1 }]
+        );
     }
 }
