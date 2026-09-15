@@ -69,6 +69,13 @@ impl Buffer {
         }
     }
 
+    pub fn new_at(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: Some(path.into()),
+            ..Self::new()
+        }
+    }
+
     pub fn open(path: impl AsRef<Path>) -> Result<Self, BufferError> {
         let path = path.as_ref().to_path_buf();
         let file = fs::File::open(&path).map_err(|source| BufferError::Io {
@@ -533,6 +540,16 @@ mod tests {
     fn untitled_buffers_require_save_as() {
         let mut buffer = Buffer::from_text("draft");
         assert!(matches!(buffer.save(), Err(BufferError::Untitled)));
+    }
+
+    #[test]
+    fn new_file_can_be_assigned_before_its_first_save() {
+        let path = test_path("new.py");
+        let mut buffer = Buffer::new_at(&path);
+        buffer.insert("print('hello')\n");
+        buffer.save().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "print('hello')\n");
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

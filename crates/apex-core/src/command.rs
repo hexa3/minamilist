@@ -54,6 +54,26 @@ impl CommandRegistry {
                 title: "Edit: Redo",
                 shortcut: Some("Ctrl+Shift+Z"),
             },
+            Command {
+                id: CommandId("python.run"),
+                title: "Python: Run File",
+                shortcut: Some("F5"),
+            },
+            Command {
+                id: CommandId("python.stop"),
+                title: "Python: Stop",
+                shortcut: Some("Shift+F5"),
+            },
+            Command {
+                id: CommandId("output.toggle"),
+                title: "View: Toggle Output",
+                shortcut: Some("Ctrl+J"),
+            },
+            Command {
+                id: CommandId("output.clear"),
+                title: "Output: Clear",
+                shortcut: None,
+            },
         ];
         Self { commands }
     }

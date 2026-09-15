@@ -55,6 +55,20 @@ fn launch_target(path: Option<PathBuf>) -> Result<(Buffer, PathBuf)> {
     let Some(path) = path else {
         return Ok((Buffer::new(), current));
     };
+    if !path.exists() {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty());
+        let root = parent
+            .unwrap_or(&current)
+            .canonicalize()
+            .with_context(|| format!("cannot open parent directory for {}", path.display()))?;
+        let name = path
+            .file_name()
+            .context("new file path must include a file name")?;
+        let path = root.join(name);
+        return Ok((Buffer::new_at(path), root));
+    }
     let path = path
         .canonicalize()
         .with_context(|| format!("cannot open {}", path.display()))?;
@@ -83,5 +97,15 @@ mod tests {
             Action::Launch(Some("-draft.rs".into()))
         );
         assert!(parse_args(["--wat".into()]).is_err());
+    }
+
+    #[test]
+    fn prepares_a_missing_file_without_creating_it() {
+        let name = format!("minamilist-new-{}.py", std::process::id());
+        let path = env::temp_dir().join(name);
+        let (buffer, root) = launch_target(Some(path.clone())).unwrap();
+        assert_eq!(buffer.path(), Some(path.as_path()));
+        assert_eq!(root, env::temp_dir().canonicalize().unwrap());
+        assert!(!path.exists());
     }
 }

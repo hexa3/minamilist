@@ -2,6 +2,8 @@
 
 use std::{path::PathBuf, sync::Arc, time::Instant};
 
+mod python;
+
 use anyhow::{Context, Result};
 use apex_core::{Buffer as EditorBuffer, CommandId, CommandRegistry, ProjectIndex};
 use apex_syntax::{HighlightKind, Language, SyntaxDocument};
@@ -23,6 +25,8 @@ use winit::{
     keyboard::{Key, ModifiersState, NamedKey},
     window::{Window, WindowId},
 };
+
+use python::PythonRun;
 
 const BACKGROUND: wgpu::Color = wgpu::Color {
     r: 0.035,
@@ -107,6 +111,29 @@ impl Application {
                 }
                 _ => return,
             }
+            state.window.request_redraw();
+            return;
+        }
+
+        if matches!(event.logical_key, Key::Named(NamedKey::F5)) {
+            if self.modifiers.shift_key() {
+                state.stop_python();
+            } else {
+                state.run_python();
+            }
+            return;
+        }
+        if primary
+            && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("r"))
+        {
+            state.run_python();
+            return;
+        }
+        if primary
+            && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("j"))
+        {
+            state.show_output = !state.show_output;
+            state.resize_text_buffers();
             state.window.request_redraw();
             return;
         }
@@ -241,6 +268,11 @@ struct WindowState {
     atlas: TextAtlas,
     renderer: TextRenderer,
     text_buffer: TextBuffer,
+    output_buffer: TextBuffer,
+    output: String,
+    show_output: bool,
+    output_scroll_line: usize,
+    python_run: Option<PythonRun>,
     blink_started: Instant,
     scroll_line: usize,
     pointer: PhysicalPosition<f64>,
@@ -308,6 +340,8 @@ impl WindowState {
             Some(size.width.saturating_sub(32) as f32),
             Some(size.height.saturating_sub(32) as f32),
         );
+        let mut output_buffer = TextBuffer::new(&mut font_system, Metrics::new(14.0, 20.0));
+        output_buffer.set_size(Some(size.width.saturating_sub(32) as f32), Some(190.0));
 
         let syntax = editor
             .path()
@@ -331,6 +365,11 @@ impl WindowState {
             atlas,
             renderer,
             text_buffer,
+            output_buffer,
+            output: "Python output will appear here.  Run with F5 or Ctrl+R.".into(),
+            show_output: false,
+            output_scroll_line: 0,
+            python_run: None,
             blink_started: Instant::now(),
             scroll_line: 0,
             pointer: PhysicalPosition::new(0.0, 0.0),
@@ -345,11 +384,34 @@ impl WindowState {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
-        self.text_buffer.set_size(
-            Some(width.saturating_sub(32) as f32),
-            Some(height.saturating_sub(32) as f32),
-        );
+        self.resize_text_buffers();
         self.window.request_redraw();
+    }
+
+    fn output_height(&self) -> u32 {
+        if self.show_output {
+            (self.surface_config.height * 35 / 100).clamp(140, 260)
+        } else {
+            0
+        }
+    }
+
+    fn editor_bottom(&self) -> u32 {
+        self.surface_config
+            .height
+            .saturating_sub(self.output_height())
+    }
+
+    fn resize_text_buffers(&mut self) {
+        let width = self.surface_config.width.saturating_sub(32) as f32;
+        self.text_buffer.set_size(
+            Some(width),
+            Some(self.editor_bottom().saturating_sub(24) as f32),
+        );
+        self.output_buffer.set_size(
+            Some(width),
+            Some(self.output_height().saturating_sub(32) as f32),
+        );
     }
 
     fn reset_blink(&mut self) {
@@ -358,7 +420,7 @@ impl WindowState {
 
     fn reveal_cursor(&mut self) {
         let line = self.editor.line_column().0;
-        let visible_lines = (self.surface_config.height as usize / 24).max(1);
+        let visible_lines = (self.editor_bottom() as usize / 24).max(1);
         if line < self.scroll_line {
             self.scroll_line = line;
         } else if line >= self.scroll_line + visible_lines {
@@ -374,12 +436,20 @@ impl WindowState {
             MouseScrollDelta::LineDelta(_, y) => y.round() as isize,
             MouseScrollDelta::PixelDelta(position) => (position.y / 24.0).round() as isize,
         };
-        self.scroll_line = self.scroll_line.saturating_add_signed(-lines);
+        if self.show_output && self.pointer.y >= f64::from(self.editor_bottom()) {
+            self.output_scroll_line = self.output_scroll_line.saturating_add_signed(-lines);
+        } else {
+            self.scroll_line = self.scroll_line.saturating_add_signed(-lines);
+        }
         self.window.request_redraw();
     }
 
     fn place_cursor_from_pointer(&mut self) {
-        if self.palette.is_some() || self.pointer.x < 16.0 || self.pointer.y < 16.0 {
+        if self.palette.is_some()
+            || self.pointer.x < 16.0
+            || self.pointer.y < 16.0
+            || self.pointer.y >= f64::from(self.editor_bottom())
+        {
             return;
         }
         let Some(hit) = self
@@ -426,11 +496,125 @@ impl WindowState {
             .unwrap_or("untitled");
         let dirty = if self.editor.is_dirty() { "● " } else { "" };
         let (line, column) = self.editor.line_column();
+        let running = if self.python_run.is_some() {
+            "  —  running Python"
+        } else {
+            ""
+        };
         self.window.set_title(&format!(
-            "{dirty}{file}  —  {}:{}  —  {PRODUCT_NAME}",
+            "{dirty}{file}  —  {}:{}{running}  —  {PRODUCT_NAME}",
             line + 1,
             column + 1
         ));
+    }
+
+    fn run_python(&mut self) {
+        if self.python_run.is_some() {
+            self.output
+                .push_str("\nA Python process is already running.\n");
+            self.show_output = true;
+            self.resize_text_buffers();
+            self.window.request_redraw();
+            return;
+        }
+        let Some(path) = self.editor.path().map(PathBuf::from) else {
+            self.output = "Cannot run an untitled buffer. Open or create a .py file first.".into();
+            self.show_output = true;
+            self.resize_text_buffers();
+            self.window.request_redraw();
+            return;
+        };
+        let is_python = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(extension.to_ascii_lowercase().as_str(), "py" | "pyw")
+            });
+        if !is_python {
+            self.output = format!("{} is not a Python file.", path.display());
+            self.show_output = true;
+            self.resize_text_buffers();
+            self.window.request_redraw();
+            return;
+        }
+        if let Err(error) = self.editor.save() {
+            self.output = format!("Could not save before running:\n{error}");
+            self.show_output = true;
+            self.resize_text_buffers();
+            self.window.request_redraw();
+            return;
+        }
+        let path = match python::canonical_python_path(&path) {
+            Ok(path) => path,
+            Err(error) => {
+                self.output = format!("Could not resolve {}:\n{error}", path.display());
+                self.show_output = true;
+                self.resize_text_buffers();
+                self.window.request_redraw();
+                return;
+            }
+        };
+        match PythonRun::start(&path) {
+            Ok(run) => {
+                self.output = format!("Running {}…", path.display());
+                self.output_scroll_line = 0;
+                self.python_run = Some(run);
+            }
+            Err(error) => {
+                self.output = format!(
+                    "Could not start Python:\n{error}\n\nInstall Python 3 and ensure python3 or python is on PATH."
+                );
+            }
+        }
+        self.show_output = true;
+        self.resize_text_buffers();
+        self.update_title();
+        self.window.request_redraw();
+    }
+
+    fn stop_python(&mut self) {
+        if let Some(run) = &self.python_run {
+            run.stop();
+            self.output.push_str("\nStopping…");
+        } else {
+            self.output = "No Python process is running.".into();
+        }
+        self.show_output = true;
+        self.resize_text_buffers();
+        self.window.request_redraw();
+    }
+
+    fn poll_python(&mut self) {
+        let result = self.python_run.as_ref().and_then(PythonRun::try_finish);
+        let Some(result) = result else {
+            return;
+        };
+        let status = if result.stopped {
+            "stopped".into()
+        } else if let Some(code) = result.exit_code {
+            format!("exited with code {code}")
+        } else {
+            "exited without a status code".into()
+        };
+        let mut output = format!(
+            "Python ({}) {status} in {:.2?}\n",
+            result.interpreter, result.elapsed
+        );
+        if !result.stdout.is_empty() {
+            output.push_str("\nstdout\n──────\n");
+            output.push_str(&result.stdout);
+        }
+        if !result.stderr.is_empty() {
+            output.push_str("\nstderr\n──────\n");
+            output.push_str(&result.stderr);
+        }
+        if result.stdout.is_empty() && result.stderr.is_empty() {
+            output.push_str("\n(no output)\n");
+        }
+        self.output = output;
+        self.output_scroll_line = 0;
+        self.python_run = None;
+        self.update_title();
     }
 
     fn sync_syntax(&mut self) {
@@ -531,6 +715,13 @@ impl WindowState {
                     self.editor.redo();
                     self.sync_syntax();
                 }
+                Some(CommandId("python.run")) => self.run_python(),
+                Some(CommandId("python.stop")) => self.stop_python(),
+                Some(CommandId("output.toggle")) => {
+                    self.show_output = !self.show_output;
+                    self.resize_text_buffers();
+                }
+                Some(CommandId("output.clear")) => self.output.clear(),
                 _ => {}
             },
         }
@@ -575,6 +766,7 @@ impl WindowState {
     }
 
     fn render(&mut self) {
+        self.poll_python();
         let (display_text, cursor_byte) = self.display_text();
         self.rendered_cursor_byte = cursor_byte;
         let default_attrs = Attrs::new().family(Family::Monospace);
@@ -596,6 +788,27 @@ impl WindowState {
             .set_scroll(glyphon::cosmic_text::Scroll::new(line, 0.0, 0.0));
         self.text_buffer
             .shape_until_scroll(&mut self.font_system, false);
+        if self.show_output {
+            let state = if self.python_run.is_some() {
+                "RUNNING"
+            } else {
+                "OUTPUT"
+            };
+            let output = format!(
+                "{state}    F5 run · Shift+F5 stop · Ctrl+J hide\n────────────────────────────────────────────────\n{}",
+                self.output
+            );
+            self.output_buffer
+                .set_text(&output, &default_attrs, Shaping::Advanced, None);
+            self.output_buffer
+                .set_scroll(glyphon::cosmic_text::Scroll::new(
+                    self.output_scroll_line,
+                    0.0,
+                    0.0,
+                ));
+            self.output_buffer
+                .shape_until_scroll(&mut self.font_system, false);
+        }
         self.viewport.update(
             &self.queue,
             Resolution {
@@ -603,6 +816,37 @@ impl WindowState {
                 height: self.surface_config.height,
             },
         );
+        let editor_bottom = self.editor_bottom() as i32;
+        let mut areas = vec![TextArea {
+            buffer: &self.text_buffer,
+            left: 16.0,
+            top: 16.0,
+            scale: 1.0,
+            bounds: TextBounds {
+                left: 0,
+                top: 0,
+                right: self.surface_config.width as i32,
+                bottom: editor_bottom,
+            },
+            default_color: Color::rgb(220, 225, 235),
+            custom_glyphs: &[],
+        }];
+        if self.show_output {
+            areas.push(TextArea {
+                buffer: &self.output_buffer,
+                left: 16.0,
+                top: editor_bottom as f32 + 10.0,
+                scale: 1.0,
+                bounds: TextBounds {
+                    left: 0,
+                    top: editor_bottom,
+                    right: self.surface_config.width as i32,
+                    bottom: self.surface_config.height as i32,
+                },
+                default_color: Color::rgb(170, 180, 198),
+                custom_glyphs: &[],
+            });
+        }
         self.renderer
             .prepare(
                 &self.device,
@@ -610,20 +854,7 @@ impl WindowState {
                 &mut self.font_system,
                 &mut self.atlas,
                 &self.viewport,
-                [TextArea {
-                    buffer: &self.text_buffer,
-                    left: 16.0,
-                    top: 16.0,
-                    scale: 1.0,
-                    bounds: TextBounds {
-                        left: 0,
-                        top: 0,
-                        right: self.surface_config.width as i32,
-                        bottom: self.surface_config.height as i32,
-                    },
-                    default_color: Color::rgb(220, 225, 235),
-                    custom_glyphs: &[],
-                }],
+                areas,
                 &mut self.swash_cache,
             )
             .expect("failed to prepare glyphs");
