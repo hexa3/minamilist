@@ -39,6 +39,10 @@ To try the included example:
 target/release/minamilist examples/hello.py
 ```
 
+Press `Ctrl/Cmd+\`` to open the integrated shell in the project directory.
+Type commands normally and press Enter; output streams into the terminal panel.
+Press Escape to return keyboard focus to the editor without closing the shell.
+
 ```text
 the minamilist IDE
 
@@ -67,6 +71,10 @@ Options:
 | `F5` or `Ctrl/Cmd+R` | Save and run the active Python file |
 | `Shift+F5` | Stop the active Python process |
 | `Ctrl/Cmd+J` | Toggle the output panel |
+| `Ctrl/Cmd+\`` | Toggle and focus the integrated terminal |
+| `Escape` in terminal | Return focus to the editor |
+| `Ctrl+C` in terminal | Interrupt the foreground command |
+| `Ctrl/Cmd+Shift+C` in terminal | Copy the terminal transcript |
 | `Escape` | Close a palette |
 
 Untitled buffers open a native Save As dialog on their first save. Closing or
@@ -78,7 +86,8 @@ replacing a modified file prompts to save, discard, or cancel.
 - Rope-backed, Unicode-safe editing and bounded undo history.
 - Incremental Tree-sitter highlighting for Rust, Python, JavaScript,
   TypeScript, Go, C, and C++.
-- Argument-safe Git, LSP, DAP, and pseudo-terminal libraries.
+- Integrated native pseudo-terminal plus argument-safe Git, LSP, and DAP
+  libraries.
 - Provider-neutral assistance with local-only policy enforcement and explicit
   review before applying multi-file changes.
 - Human-readable settings that are only written after an explicit apply.

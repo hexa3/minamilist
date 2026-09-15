@@ -17,6 +17,7 @@ Manually verify on every supported operating system:
 - Open, edit, Save As, close-with-unsaved-changes, and reopen a file.
 - Keyboard and mouse selection plus copy, cut, and paste with native apps.
 - Python success, syntax error, non-zero exit, long output, and stop behavior.
+- Terminal command input, history, paste, interrupt, resize, exit, and restart.
 - Project search, document search, Unicode input, resizing, and GPU recovery.
 
 ## Distribution work still required

@@ -20,6 +20,8 @@ This project follows semantic versioning. Dates use ISO 8601.
 - Added keyboard and mouse-drag selection with native cut/copy/paste.
 - Added native Open and Save As dialogs plus unsaved-change protection.
 - Added in-document search with Unicode-safe result selection.
+- Added an integrated, resizable pseudo-terminal with streaming command output,
+  shell history keys, paste, interrupt, transcript copy, and clean shutdown.
 
 ### Changed
 

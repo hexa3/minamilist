@@ -15,6 +15,7 @@ integration.
   vertical scrolling.
 - File, dirty-state, and cursor position in the window title.
 - Non-blocking Python execution with stop control and a captured output panel.
+- Integrated project-root shell with interactive input and streaming output.
 - Mouse and keyboard text selection, native clipboard operations, file dialogs,
   in-document search, and unsaved-change confirmation.
 
@@ -28,8 +29,8 @@ integration.
 
 ## Known limits
 
-- Terminal, source control, debugger, language tooling, and reviewed-edit
-  libraries do not yet have integrated panels. Python output is integrated.
+- Source control, debugger, language tooling, and reviewed-edit libraries do
+  not yet have integrated panels. Python output and the terminal are integrated.
 - The editor does not yet provide tabs or split-pane rendering.
 - Release binaries are not currently packaged; build with Cargo.
 
