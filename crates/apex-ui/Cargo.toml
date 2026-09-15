@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 apex-core = { path = "../apex-core" }
 apex-syntax = { path = "../apex-syntax" }
+apex-term = { path = "../apex-term" }
 anyhow.workspace = true
 arboard.workspace = true
 glyphon.workspace = true

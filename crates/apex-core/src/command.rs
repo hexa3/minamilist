@@ -104,6 +104,16 @@ impl CommandRegistry {
                 title: "Output: Clear",
                 shortcut: None,
             },
+            Command {
+                id: CommandId("terminal.toggle"),
+                title: "Terminal: Toggle",
+                shortcut: Some("Ctrl+`"),
+            },
+            Command {
+                id: CommandId("terminal.clear"),
+                title: "Terminal: Clear",
+                shortcut: None,
+            },
         ];
         Self { commands }
     }

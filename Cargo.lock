@@ -178,6 +178,7 @@ dependencies = [
  "anyhow",
  "apex-core",
  "apex-syntax",
+ "apex-term",
  "arboard",
  "glyphon",
  "pollster 1.0.1",

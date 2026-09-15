@@ -3,6 +3,7 @@
 use std::{path::PathBuf, sync::Arc, time::Instant};
 
 mod python;
+mod terminal;
 
 use anyhow::{Context, Result};
 use apex_core::{Buffer as EditorBuffer, CommandId, CommandRegistry, ProjectIndex};
@@ -28,6 +29,7 @@ use winit::{
 };
 
 use python::PythonRun;
+use terminal::TerminalPane;
 
 const BACKGROUND: wgpu::Color = wgpu::Color {
     r: 0.035,
@@ -76,6 +78,21 @@ impl Application {
         };
 
         let primary = self.modifiers.control_key() || self.modifiers.super_key();
+        if primary
+            && matches!(&event.logical_key, Key::Character(character) if character.as_str() == "`")
+        {
+            state.toggle_terminal();
+            return;
+        }
+        if state.terminal_focused {
+            state.handle_terminal_key(
+                event,
+                primary,
+                self.modifiers.control_key(),
+                self.modifiers.shift_key(),
+            );
+            return;
+        }
         if primary
             && self.modifiers.shift_key()
             && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("p"))
@@ -190,6 +207,7 @@ impl Application {
             && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("j"))
         {
             state.show_output = !state.show_output;
+            state.show_terminal = false;
             state.resize_text_buffers();
             state.window.request_redraw();
             return;
@@ -301,9 +319,16 @@ impl ApplicationHandler for Application {
                 button: MouseButton::Left,
                 ..
             } => {
-                self.mouse_selecting = true;
                 if let Some(state) = self.window_state.as_mut() {
-                    state.place_cursor_from_pointer(self.modifiers.shift_key());
+                    if state.show_terminal && state.pointer.y >= f64::from(state.editor_bottom()) {
+                        self.mouse_selecting = false;
+                        state.terminal_focused = true;
+                        state.update_title();
+                    } else {
+                        self.mouse_selecting = true;
+                        state.terminal_focused = false;
+                        state.place_cursor_from_pointer(self.modifiers.shift_key());
+                    }
                 }
             }
             WindowEvent::MouseInput {
@@ -349,10 +374,15 @@ struct WindowState {
     renderer: TextRenderer,
     text_buffer: TextBuffer,
     output_buffer: TextBuffer,
+    terminal_buffer: TextBuffer,
     output: String,
     show_output: bool,
     output_scroll_line: usize,
     python_run: Option<PythonRun>,
+    terminal: Option<TerminalPane>,
+    show_terminal: bool,
+    terminal_focused: bool,
+    terminal_scroll_line: usize,
     clipboard: Option<Clipboard>,
     blink_started: Instant,
     scroll_line: usize,
@@ -423,6 +453,8 @@ impl WindowState {
         );
         let mut output_buffer = TextBuffer::new(&mut font_system, Metrics::new(14.0, 20.0));
         output_buffer.set_size(Some(size.width.saturating_sub(32) as f32), Some(190.0));
+        let mut terminal_buffer = TextBuffer::new(&mut font_system, Metrics::new(14.0, 20.0));
+        terminal_buffer.set_size(Some(size.width.saturating_sub(32) as f32), Some(190.0));
 
         let syntax = editor
             .path()
@@ -447,10 +479,15 @@ impl WindowState {
             renderer,
             text_buffer,
             output_buffer,
+            terminal_buffer,
             output: "Python output will appear here.  Run with F5 or Ctrl+R.".into(),
             show_output: false,
             output_scroll_line: 0,
             python_run: None,
+            terminal: None,
+            show_terminal: false,
+            terminal_focused: false,
+            terminal_scroll_line: 0,
             clipboard: Clipboard::new().ok(),
             blink_started: Instant::now(),
             scroll_line: 0,
@@ -471,7 +508,7 @@ impl WindowState {
     }
 
     fn output_height(&self) -> u32 {
-        if self.show_output {
+        if self.show_output || self.show_terminal {
             (self.surface_config.height * 35 / 100).clamp(140, 260)
         } else {
             0
@@ -494,6 +531,11 @@ impl WindowState {
             Some(width),
             Some(self.output_height().saturating_sub(32) as f32),
         );
+        self.terminal_buffer.set_size(
+            Some(width),
+            Some(self.output_height().saturating_sub(32) as f32),
+        );
+        let _ = self.resize_terminal();
     }
 
     fn reset_blink(&mut self) {
@@ -518,8 +560,14 @@ impl WindowState {
             MouseScrollDelta::LineDelta(_, y) => y.round() as isize,
             MouseScrollDelta::PixelDelta(position) => (position.y / 24.0).round() as isize,
         };
-        if self.show_output && self.pointer.y >= f64::from(self.editor_bottom()) {
-            self.output_scroll_line = self.output_scroll_line.saturating_add_signed(-lines);
+        if (self.show_output || self.show_terminal)
+            && self.pointer.y >= f64::from(self.editor_bottom())
+        {
+            if self.show_terminal {
+                self.terminal_scroll_line = self.terminal_scroll_line.saturating_add_signed(-lines);
+            } else {
+                self.output_scroll_line = self.output_scroll_line.saturating_add_signed(-lines);
+            }
         } else {
             self.scroll_line = self.scroll_line.saturating_add_signed(-lines);
         }
@@ -579,13 +627,15 @@ impl WindowState {
             .unwrap_or("untitled");
         let dirty = if self.editor.is_dirty() { "● " } else { "" };
         let (line, column) = self.editor.line_column();
-        let running = if self.python_run.is_some() {
+        let activity = if self.terminal_focused {
+            "  —  terminal"
+        } else if self.python_run.is_some() {
             "  —  running Python"
         } else {
             ""
         };
         self.window.set_title(&format!(
-            "{dirty}{file}  —  {}:{}{running}  —  {PRODUCT_NAME}",
+            "{dirty}{file}  —  {}:{}{activity}  —  {PRODUCT_NAME}",
             line + 1,
             column + 1
         ));
@@ -671,8 +721,135 @@ impl WindowState {
     fn show_error(&mut self, message: impl Into<String>) {
         self.output = message.into();
         self.show_output = true;
+        self.show_terminal = false;
+        self.terminal_focused = false;
         self.resize_text_buffers();
         self.window.request_redraw();
+    }
+
+    fn terminal_dimensions(&self) -> (u16, u16) {
+        let columns = (self.surface_config.width.saturating_sub(32) / 8).clamp(20, u16::MAX as u32);
+        let rows = (self.output_height().saturating_sub(32) / 20).clamp(4, u16::MAX as u32);
+        (columns as u16, rows as u16)
+    }
+
+    fn resize_terminal(&self) -> Result<(), apex_term::TerminalError> {
+        if let Some(terminal) = self.terminal.as_ref() {
+            let (columns, rows) = self.terminal_dimensions();
+            terminal.resize(columns, rows)?;
+        }
+        Ok(())
+    }
+
+    fn toggle_terminal(&mut self) {
+        if self.show_terminal && self.terminal_focused {
+            self.show_terminal = false;
+            self.terminal_focused = false;
+            self.resize_text_buffers();
+            self.update_title();
+            self.window.request_redraw();
+            return;
+        }
+        if self
+            .terminal
+            .as_ref()
+            .is_none_or(|terminal| !terminal.is_running())
+        {
+            let root = self
+                .project
+                .as_ref()
+                .map(|project| project.root())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            let (columns, rows) = self.terminal_dimensions();
+            match TerminalPane::start(root, columns, rows) {
+                Ok(terminal) => self.terminal = Some(terminal),
+                Err(error) => {
+                    self.show_error(format!("Could not start the terminal:\n{error}"));
+                    return;
+                }
+            }
+        }
+        self.show_terminal = true;
+        self.show_output = false;
+        self.terminal_focused = true;
+        self.resize_text_buffers();
+        self.update_title();
+        self.window.request_redraw();
+    }
+
+    fn handle_terminal_key(&mut self, event: &KeyEvent, primary: bool, control: bool, shift: bool) {
+        let input: Option<Vec<u8>> = match &event.logical_key {
+            Key::Named(NamedKey::Escape) => {
+                self.terminal_focused = false;
+                self.update_title();
+                self.window.request_redraw();
+                return;
+            }
+            Key::Named(NamedKey::Enter) => Some(vec![b'\r']),
+            Key::Named(NamedKey::Backspace) => Some(vec![0x7f]),
+            Key::Named(NamedKey::Tab) => Some(vec![b'\t']),
+            Key::Named(NamedKey::Space) if !primary => Some(vec![b' ']),
+            Key::Named(NamedKey::ArrowUp) => Some(b"\x1b[A".to_vec()),
+            Key::Named(NamedKey::ArrowDown) => Some(b"\x1b[B".to_vec()),
+            Key::Named(NamedKey::ArrowRight) => Some(b"\x1b[C".to_vec()),
+            Key::Named(NamedKey::ArrowLeft) => Some(b"\x1b[D".to_vec()),
+            Key::Named(NamedKey::Home) => Some(b"\x1b[H".to_vec()),
+            Key::Named(NamedKey::End) => Some(b"\x1b[F".to_vec()),
+            Key::Character(character)
+                if primary && shift && character.eq_ignore_ascii_case("c") =>
+            {
+                if let Some(screen) = self.terminal.as_ref().map(TerminalPane::screen) {
+                    let _ = self
+                        .clipboard
+                        .as_mut()
+                        .map(|clipboard| clipboard.set_text(screen));
+                }
+                None
+            }
+            Key::Character(character) if control && character.eq_ignore_ascii_case("c") => {
+                Some(vec![0x03])
+            }
+            Key::Character(character) if primary && character.eq_ignore_ascii_case("l") => {
+                if let Some(terminal) = self.terminal.as_mut() {
+                    terminal.clear();
+                }
+                Some(vec![0x0c])
+            }
+            Key::Character(character) if primary && character.eq_ignore_ascii_case("v") => self
+                .clipboard
+                .as_mut()
+                .and_then(|clipboard| clipboard.get_text().ok())
+                .map(String::into_bytes),
+            Key::Character(character) if !primary => Some(character.as_bytes().to_vec()),
+            _ => None,
+        };
+        if let Some(input) = input
+            && let Some(terminal) = self.terminal.as_mut()
+            && let Err(error) = terminal.send(&input)
+        {
+            self.show_error(format!("Terminal input failed:\n{error}"));
+            return;
+        }
+        self.window.request_redraw();
+    }
+
+    fn poll_terminal(&mut self) {
+        let changed = match self.terminal.as_mut().map(TerminalPane::poll) {
+            Some(Ok(changed)) => changed,
+            Some(Err(error)) => {
+                self.show_error(format!("Terminal failed:\n{error}"));
+                return;
+            }
+            None => false,
+        };
+        if changed && let Some(terminal) = self.terminal.as_ref() {
+            let visible_rows = (self.output_height().saturating_sub(32) / 20) as usize;
+            self.terminal_scroll_line = terminal
+                .screen()
+                .lines()
+                .count()
+                .saturating_sub(visible_rows.max(1));
+        }
     }
 
     fn save_current(&mut self) -> bool {
@@ -848,6 +1025,8 @@ impl WindowState {
             }
         }
         self.show_output = true;
+        self.show_terminal = false;
+        self.terminal_focused = false;
         self.resize_text_buffers();
         self.update_title();
         self.window.request_redraw();
@@ -1020,6 +1199,13 @@ impl WindowState {
                     self.resize_text_buffers();
                 }
                 Some(CommandId("output.clear")) => self.output.clear(),
+                Some(CommandId("terminal.toggle")) => self.toggle_terminal(),
+                Some(CommandId("terminal.clear")) => {
+                    if let Some(terminal) = self.terminal.as_mut() {
+                        terminal.clear();
+                    }
+                    self.terminal_scroll_line = 0;
+                }
                 _ => {}
             },
             PaletteKind::Search => self.find_next(&query),
@@ -1067,6 +1253,7 @@ impl WindowState {
 
     fn render(&mut self) {
         self.poll_python();
+        self.poll_terminal();
         let (display_text, cursor_byte) = self.display_text();
         self.rendered_cursor_byte = cursor_byte;
         let default_attrs = Attrs::new().family(Family::Monospace);
@@ -1120,6 +1307,29 @@ impl WindowState {
                 ));
             self.output_buffer
                 .shape_until_scroll(&mut self.font_system, false);
+        } else if self.show_terminal {
+            let terminal_text = self
+                .terminal
+                .as_ref()
+                .map_or("Terminal is not running.", TerminalPane::screen);
+            let focus = if self.terminal_focused {
+                "FOCUSED"
+            } else {
+                "CLICK TO FOCUS"
+            };
+            let text = format!(
+                "TERMINAL · {focus}    Ctrl+` toggle · Esc editor\n────────────────────────────────────────────────\n{terminal_text}"
+            );
+            self.terminal_buffer
+                .set_text(&text, &default_attrs, Shaping::Advanced, None);
+            self.terminal_buffer
+                .set_scroll(glyphon::cosmic_text::Scroll::new(
+                    self.terminal_scroll_line,
+                    0.0,
+                    0.0,
+                ));
+            self.terminal_buffer
+                .shape_until_scroll(&mut self.font_system, false);
         }
         self.viewport.update(
             &self.queue,
@@ -1156,6 +1366,21 @@ impl WindowState {
                     bottom: self.surface_config.height as i32,
                 },
                 default_color: Color::rgb(170, 180, 198),
+                custom_glyphs: &[],
+            });
+        } else if self.show_terminal {
+            areas.push(TextArea {
+                buffer: &self.terminal_buffer,
+                left: 16.0,
+                top: editor_bottom as f32 + 10.0,
+                scale: 1.0,
+                bounds: TextBounds {
+                    left: 0,
+                    top: editor_bottom,
+                    right: self.surface_config.width as i32,
+                    bottom: self.surface_config.height as i32,
+                },
+                default_color: Color::rgb(190, 205, 190),
                 custom_glyphs: &[],
             });
         }
