@@ -1,68 +1,78 @@
-# Apex
+# minamilist
 
-Apex is an open, Rust-native, GPU-accelerated, AI-first IDE. The current build
-is an early but real native editor foundation—not a completed 1.0 IDE.
+> the minamilist IDE
 
-## What works now
+minamilist is a small, native code editor built in Rust. It keeps the writing
+surface quiet while providing the essentials locally: fast Unicode editing,
+syntax highlighting, project search, language tooling, a terminal, Git, and
+optional reviewed code assistance.
 
-- Native winit/wgpu window and glyphon text rendering (no Electron or DOM).
-- Unicode-safe rope buffer, multiple cursors, open/save, and a large-file test.
-- Incremental Tree-sitter parsing and visible highlighting for Rust, Python,
-  JavaScript/TypeScript, Go, C, and C++.
-- `Ctrl+P` fuzzy project file finder and `Ctrl+Shift+P` command palette.
-- Backend crates for LSP, DAP, real PTYs, and argument-safe Git operations.
-- Provider-neutral AI with Anthropic support, repository retrieval, reviewed
-  multi-file proposals, and a hard local-only policy.
-- Portable TOML settings that are only persisted explicitly and journal every
-  change.
+Version 1.0.5 is the current stable release.
 
-The detailed completion ledger is in [docs/SPRINT_STATUS.md](docs/SPRINT_STATUS.md).
+## Run it
 
-## Build
-
-Requirements: a current stable Rust toolchain and Linux development libraries
-for Wayland/X11 and Vulkan.
+You need Rust 1.88 or newer and the platform libraries required by `winit` and
+`wgpu`. On Linux, that normally means Wayland or X11 development libraries and
+a Vulkan-capable graphics stack.
 
 ```sh
-cargo run -p apex-cli -- [optional-file]
+cargo run --release -p apex-cli -- [FILE | DIRECTORY]
 ```
 
-Run all checks with:
+Opening a directory starts an untitled buffer with that directory as the
+project root. Opening a file uses its parent directory. With no argument,
+minamilist uses the current directory.
 
-```sh
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+```text
+the minamilist IDE
+
+Usage: minamilist [OPTIONS] [FILE | DIRECTORY]
+
+Options:
+  -h, --help       Print help
+  -V, --version    Print version
 ```
 
-## Principles
-
-- Native performance: no browser engine or DOM.
-- AI is a core subsystem with explicit review before edits are applied.
-- Useful without plugins: language tooling, terminal, Git, debugging, tests.
-- Trustworthy defaults: settings are portable and never silently rewritten.
-- Open and forkable under the MIT license.
-
-## Keyboard controls
+## Keys
 
 | Key | Action |
 | --- | --- |
-| `Ctrl+P` | Find and open a project file |
-| `Ctrl+Shift+P` | Open the command palette |
-| `Ctrl+S` | Save the active file |
-| `Left` / `Right` | Move the primary cursor |
+| `Ctrl/Cmd+P` | Find a project file |
+| `Ctrl/Cmd+Shift+P` | Open the command palette |
+| `Ctrl/Cmd+O` | Find a project file |
+| `Ctrl/Cmd+S` | Save the active file |
+| `Ctrl/Cmd+Z` | Undo |
+| `Ctrl/Cmd+Shift+Z` or `Ctrl+Y` | Redo |
+| `Ctrl/Cmd+Left/Right` | Move by word |
+| `Ctrl/Cmd+Home/End` | Move to document edge |
 | `Escape` | Close a palette |
 
-## Workspace map
+Untitled buffers deliberately require a path before they can be saved. The
+native UI does not yet include a file chooser, so open a target file from the
+command line when you intend to save it.
 
-| Crate | Responsibility |
-| --- | --- |
-| `apex-core` | Rope buffers, cursors, workspaces, commands, project index |
-| `apex-ui` | Native events, GPU surface, glyph atlas, interactive palettes |
-| `apex-syntax` | Incremental Tree-sitter documents and highlights |
-| `apex-lsp` | LSP JSON-RPC client and safe rename validation |
-| `apex-dap` | Debug Adapter Protocol client |
-| `apex-term` | Cross-platform native pseudo-terminal sessions |
-| `apex-git` | Status, diff, stage, commit, and push |
-| `apex-ai` | Providers, repository index, plan/review/apply orchestration |
-| `apex-settings` | Portable explicit-consent configuration |
-| `apex-cli` | Native executable bootstrap |
+## Design
+
+- Native windowing and GPU text rendering; no web view.
+- Rope-backed, Unicode-safe editing and bounded undo history.
+- Incremental Tree-sitter highlighting for Rust, Python, JavaScript,
+  TypeScript, Go, C, and C++.
+- Argument-safe Git, LSP, DAP, and pseudo-terminal libraries.
+- Provider-neutral assistance with local-only policy enforcement and explicit
+  review before applying multi-file changes.
+- Human-readable settings that are only written after an explicit apply.
+
+The crates remain separated by responsibility so the editor core is testable
+without a windowing environment. The `apex-*` crate names are internal legacy
+identifiers; the shipped product and executable are named `minamilist`.
+
+## Verify
+
+```sh
+cargo fmt --all -- --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo build --release --workspace
+```
+
+minamilist is available under the [MIT license](LICENSE).

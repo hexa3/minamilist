@@ -1,4 +1,4 @@
-# Contributing to Apex
+# Contributing to minamilist
 
 Install stable Rust, fork the repository, and run `cargo test --workspace`
 before opening a pull request. Keep changes focused, add a smoke test for every
@@ -12,4 +12,3 @@ Commit messages follow Conventional Commits:
 
 By contributing, you agree that your changes are licensed under the MIT
 license.
-

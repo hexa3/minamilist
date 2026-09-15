@@ -1,27 +1,26 @@
 # Changelog
 
-All notable changes to Apex are recorded here during the build sprint.
+This project follows semantic versioning. Dates use ISO 8601.
 
-## Unreleased
+## [1.0.5] - 2026-09-15
 
-- Hour 0: initialized the open Rust workspace and editor architecture.
+### Fixed
 
-### Added
+- Report an error when saving an untitled buffer instead of silently
+  discarding the request.
+- Write files through a same-directory temporary before replacing the target.
+- Resolve file and directory launch targets consistently.
 
-- Native wgpu text editor with rope-backed Unicode editing and file save.
-- Incremental highlighting for seven day-one language variants.
-- Project file finder, command palette, multi-buffer/split data model.
-- LSP, DAP, PTY, and Git backend crates with smoke tests.
-- Privacy-gated Anthropic provider, repository retrieval, and reviewed edits.
-- Explicit, portable, journaled settings and migration-safe defaults.
-- Cross-platform CI plus release-profile and large-buffer verification.
+### Changed
 
-### Sprint retro (current checkpoint)
+- Renamed the shipped product and executable to `minamilist`.
+- Added a compact document, cursor, and dirty-state window title.
+- Added cross-platform primary-modifier shortcuts and word/document movement.
+- Reworked the public documentation around the stable native editor surface.
 
-Shipped a buildable native foundation and isolated backend contracts. The
-visible debugger, terminal, Git, AI review, settings, test, and API-client
-panels were cut from this checkpoint because their end-to-end definitions of
-done were not met. WASM plugins, VS Code compatibility, CRDT collaboration,
-release packaging, and non-Linux runtime validation remain future work. No
-milestone tags were created for incomplete phases.
+## Pre-1.0 development
 
+- Built the native window, GPU renderer, and Unicode rope editor.
+- Added project search, the command palette, and incremental syntax support.
+- Added LSP, DAP, pseudo-terminal, Git, settings, and reviewed-edit libraries.
+- Added multi-cursor editing and bounded undo and redo history.
