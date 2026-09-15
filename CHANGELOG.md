@@ -11,6 +11,13 @@ This project follows semantic versioning. Dates use ISO 8601.
 - Write files through a same-directory temporary before replacing the target.
 - Resolve file and directory launch targets consistently.
 
+### Added
+
+- Run Python files asynchronously with `F5` or `Ctrl+R`.
+- Capture stdout, stderr, duration, and exit status in a native output panel.
+- Stop running Python processes with `Shift+F5`.
+- Open not-yet-created file paths and save them on first use.
+
 ### Changed
 
 - Renamed the shipped product and executable to `minamilist`.

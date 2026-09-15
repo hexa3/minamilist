@@ -23,6 +23,22 @@ Opening a directory starts an untitled buffer with that directory as the
 project root. Opening a file uses its parent directory. With no argument,
 minamilist uses the current directory.
 
+New files do not need to exist yet:
+
+```sh
+cargo run --release -p apex-cli -- hello.py
+```
+
+Type your program, press `F5`, and minamilist saves it before running it with
+`python3` (or `python` as a fallback). Standard output, errors, duration, and
+the exit code appear in the output panel without blocking the editor.
+
+To try the included example:
+
+```sh
+target/release/minamilist examples/hello.py
+```
+
 ```text
 the minamilist IDE
 
@@ -45,11 +61,14 @@ Options:
 | `Ctrl/Cmd+Shift+Z` or `Ctrl+Y` | Redo |
 | `Ctrl/Cmd+Left/Right` | Move by word |
 | `Ctrl/Cmd+Home/End` | Move to document edge |
+| `F5` or `Ctrl/Cmd+R` | Save and run the active Python file |
+| `Shift+F5` | Stop the active Python process |
+| `Ctrl/Cmd+J` | Toggle the output panel |
 | `Escape` | Close a palette |
 
 Untitled buffers deliberately require a path before they can be saved. The
-native UI does not yet include a file chooser, so open a target file from the
-command line when you intend to save it.
+native UI does not yet include a file chooser, so pass a new or existing path
+on the command line when you intend to save it.
 
 ## Design
 
