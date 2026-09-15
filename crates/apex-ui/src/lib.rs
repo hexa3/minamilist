@@ -104,6 +104,11 @@ impl Application {
                 Key::Named(NamedKey::ArrowDown) => state.move_palette_selection(1),
                 Key::Named(NamedKey::ArrowUp) => state.move_palette_selection(-1),
                 Key::Named(NamedKey::Enter) => state.accept_palette(),
+                Key::Named(NamedKey::Space) if !primary && !self.modifiers.alt_key() => {
+                    let palette = state.palette.as_mut().expect("checked above");
+                    palette.query.push(' ');
+                    palette.selected = 0;
+                }
                 Key::Character(character) if !primary && !self.modifiers.alt_key() => {
                     let palette = state.palette.as_mut().expect("checked above");
                     palette.query.push_str(character);
@@ -153,6 +158,9 @@ impl Application {
             Key::Named(NamedKey::End) => state.editor.move_to_line_end(),
             Key::Named(NamedKey::Enter) => state.editor.insert("\n"),
             Key::Named(NamedKey::Tab) => state.editor.insert("    "),
+            Key::Named(NamedKey::Space) if !primary && !self.modifiers.alt_key() => {
+                state.editor.insert(" ");
+            }
             Key::Character(character)
                 if primary
                     && !self.modifiers.shift_key()
