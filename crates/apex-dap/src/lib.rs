@@ -75,7 +75,7 @@ impl DapClient {
         self.request(
             "initialize",
             json!({
-                "clientID": "apex", "clientName": "Apex", "adapterID": adapter_id,
+                "clientID": "minamilist", "clientName": "minamilist", "adapterID": adapter_id,
                 "pathFormat": "path", "linesStartAt1": true, "columnsStartAt1": true,
                 "supportsVariableType": true, "supportsRunInTerminalRequest": true
             }),

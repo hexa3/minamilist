@@ -76,7 +76,7 @@ impl<'a> Agent<'a> {
             .join("\n\n");
         let response = self.provider.complete(
             &CompletionRequest {
-                system: "You are Apex's editing agent. Return only JSON with summary, plan, edits (path, original, replacement, rationale), and verification. Use exact original text. Never use absolute paths.".into(),
+                system: "You are minamilist's editing agent. Return only JSON with summary, plan, edits (path, original, replacement, rationale), and verification. Use exact original text. Never use absolute paths.".into(),
                 prompt: format!("TASK\n{task}\n\nREPOSITORY CONTEXT\n{context}"),
                 max_tokens: 8192,
                 temperature: 0.1,

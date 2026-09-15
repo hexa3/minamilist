@@ -148,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn discovers_the_apex_repository() {
+    fn discovers_the_workspace_repository() {
         let repository = GitRepository::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
         assert!(repository.root().join("Cargo.toml").is_file());
     }

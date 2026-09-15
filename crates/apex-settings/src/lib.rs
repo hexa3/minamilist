@@ -47,7 +47,8 @@ pub struct AiSettings {
 #[serde(rename_all = "kebab-case")]
 pub enum Keymap {
     #[default]
-    Apex,
+    #[serde(alias = "apex")]
+    Minamilist,
     VsCode,
     JetBrains,
 }
@@ -59,7 +60,7 @@ impl Default for Settings {
             editor: EditorSettings::default(),
             appearance: AppearanceSettings::default(),
             ai: AiSettings::default(),
-            keymap: Keymap::Apex,
+            keymap: Keymap::Minamilist,
         }
     }
 }
@@ -78,7 +79,7 @@ impl Default for EditorSettings {
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
-            theme: "Apex Dark".into(),
+            theme: "Minamilist Dark".into(),
         }
     }
 }
@@ -128,7 +129,7 @@ impl SettingsStore {
             fs::create_dir_all(parent)?;
         }
         let encoded = toml::to_string_pretty(settings)?;
-        let temporary = self.path.with_extension("toml.apex-new");
+        let temporary = self.path.with_extension("toml.minamilist-new");
         fs::write(&temporary, encoded)?;
         fs::rename(&temporary, &self.path)?;
         self.journal(reason)?;
@@ -157,7 +158,7 @@ mod tests {
 
     fn test_directory() -> PathBuf {
         std::env::temp_dir().join(format!(
-            "apex-settings-test-{}-{}",
+            "minamilist-settings-test-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

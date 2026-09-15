@@ -1,4 +1,4 @@
-//! Language Server Protocol subprocess client used by Apex.
+//! Language Server Protocol subprocess client used by minamilist.
 
 use std::{
     collections::HashMap,
@@ -139,7 +139,7 @@ impl LspClient {
                     },
                     "workspace": { "workspaceEdit": { "documentChanges": true } }
                 },
-                "clientInfo": { "name": "Apex", "version": env!("CARGO_PKG_VERSION") }
+                "clientInfo": { "name": "minamilist", "version": env!("CARGO_PKG_VERSION") }
             }),
         )?;
         self.notify("initialized", json!({}))?;

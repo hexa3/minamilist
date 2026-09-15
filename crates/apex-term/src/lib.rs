@@ -1,4 +1,4 @@
-//! Cross-platform pseudo-terminal sessions for Apex's integrated terminal.
+//! Cross-platform pseudo-terminal sessions for minamilist's integrated terminal.
 
 use std::{
     io::{self, Read, Write},
