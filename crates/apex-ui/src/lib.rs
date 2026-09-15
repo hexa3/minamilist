@@ -1,6 +1,6 @@
-//! Native winit + wgpu frontend for Apex.
+//! Native winit + wgpu frontend for minamilist.
 
-use std::{sync::Arc, time::Instant};
+use std::{path::PathBuf, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
 use apex_core::{Buffer as EditorBuffer, CommandId, CommandRegistry, ProjectIndex};
@@ -17,8 +17,8 @@ use wgpu::{
 };
 use winit::{
     application::ApplicationHandler,
-    dpi::LogicalSize,
-    event::{ElementState, KeyEvent, WindowEvent},
+    dpi::{LogicalSize, PhysicalPosition},
+    event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, EventLoop},
     keyboard::{Key, ModifiersState, NamedKey},
     window::{Window, WindowId},
@@ -31,10 +31,13 @@ const BACKGROUND: wgpu::Color = wgpu::Color {
     a: 1.0,
 };
 
+const PRODUCT_NAME: &str = "minamilist";
+const PRODUCT_TAGLINE: &str = "the minamilist IDE";
+
 /// Start the native editor event loop.
-pub fn run(buffer: EditorBuffer) -> Result<()> {
+pub fn run(buffer: EditorBuffer, project_root: PathBuf) -> Result<()> {
     let event_loop = EventLoop::new().context("failed to create native event loop")?;
-    let mut application = Application::new(buffer);
+    let mut application = Application::new(buffer, project_root);
     event_loop
         .run_app(&mut application)
         .context("native event loop failed")
@@ -42,14 +45,16 @@ pub fn run(buffer: EditorBuffer) -> Result<()> {
 
 struct Application {
     editor: Option<EditorBuffer>,
+    project_root: PathBuf,
     window_state: Option<WindowState>,
     modifiers: ModifiersState,
 }
 
 impl Application {
-    fn new(buffer: EditorBuffer) -> Self {
+    fn new(buffer: EditorBuffer, project_root: PathBuf) -> Self {
         Self {
             editor: Some(buffer),
+            project_root,
             window_state: None,
             modifiers: ModifiersState::default(),
         }
@@ -63,7 +68,8 @@ impl Application {
             return;
         };
 
-        if self.modifiers.control_key()
+        let primary = self.modifiers.control_key() || self.modifiers.super_key();
+        if primary
             && self.modifiers.shift_key()
             && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("p"))
         {
@@ -71,8 +77,15 @@ impl Application {
             state.window.request_redraw();
             return;
         }
-        if self.modifiers.control_key()
+        if primary
             && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("p"))
+        {
+            state.palette = Some(Palette::files());
+            state.window.request_redraw();
+            return;
+        }
+        if primary
+            && matches!(&event.logical_key, Key::Character(character) if character.eq_ignore_ascii_case("o"))
         {
             state.palette = Some(Palette::files());
             state.window.request_redraw();
@@ -87,11 +100,7 @@ impl Application {
                 Key::Named(NamedKey::ArrowDown) => state.move_palette_selection(1),
                 Key::Named(NamedKey::ArrowUp) => state.move_palette_selection(-1),
                 Key::Named(NamedKey::Enter) => state.accept_palette(),
-                Key::Character(character)
-                    if !self.modifiers.control_key()
-                        && !self.modifiers.super_key()
-                        && !self.modifiers.alt_key() =>
-                {
+                Key::Character(character) if !primary && !self.modifiers.alt_key() => {
                     let palette = state.palette.as_mut().expect("checked above");
                     palette.query.push_str(character);
                     palette.selected = 0;
@@ -103,6 +112,10 @@ impl Application {
         }
 
         match &event.logical_key {
+            Key::Named(NamedKey::ArrowLeft) if primary => state.editor.move_word_left(),
+            Key::Named(NamedKey::ArrowRight) if primary => state.editor.move_word_right(),
+            Key::Named(NamedKey::Home) if primary => state.editor.move_to_document_start(),
+            Key::Named(NamedKey::End) if primary => state.editor.move_to_document_end(),
             Key::Named(NamedKey::Backspace) => state.editor.backspace(),
             Key::Named(NamedKey::Delete) => state.editor.delete_forward(),
             Key::Named(NamedKey::ArrowLeft) => state.editor.move_left(),
@@ -114,37 +127,33 @@ impl Application {
             Key::Named(NamedKey::Enter) => state.editor.insert("\n"),
             Key::Named(NamedKey::Tab) => state.editor.insert("    "),
             Key::Character(character)
-                if self.modifiers.control_key()
+                if primary
                     && !self.modifiers.shift_key()
                     && character.eq_ignore_ascii_case("z") =>
             {
                 state.editor.undo();
             }
             Key::Character(character)
-                if self.modifiers.control_key()
+                if primary
                     && (self.modifiers.shift_key() && character.eq_ignore_ascii_case("z")
                         || character.eq_ignore_ascii_case("y")) =>
             {
                 state.editor.redo();
             }
-            Key::Character(character)
-                if self.modifiers.control_key() && character.eq_ignore_ascii_case("s") =>
-            {
+            Key::Character(character) if primary && character.eq_ignore_ascii_case("s") => {
                 if let Err(error) = state.editor.save() {
-                    eprintln!("Apex: {error}");
+                    eprintln!("{PRODUCT_NAME}: {error}");
                 }
             }
-            Key::Character(character)
-                if !self.modifiers.control_key()
-                    && !self.modifiers.super_key()
-                    && !self.modifiers.alt_key() =>
-            {
+            Key::Character(character) if !primary && !self.modifiers.alt_key() => {
                 state.editor.insert(character);
             }
             _ => return,
         }
         state.reset_blink();
         state.sync_syntax();
+        state.reveal_cursor();
+        state.update_title();
         state.window.request_redraw();
     }
 }
@@ -155,16 +164,19 @@ impl ApplicationHandler for Application {
             return;
         }
         let attributes = Window::default_attributes()
-            .with_title("Apex")
+            .with_title(PRODUCT_TAGLINE)
             .with_inner_size(LogicalSize::new(1100.0, 720.0));
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
-                .expect("failed to create Apex window"),
+                .expect("failed to create minamilist window"),
         );
         let editor = self.editor.take().expect("editor state initialized once");
         self.window_state = Some(pollster::block_on(WindowState::new(
-            window, event_loop, editor,
+            window,
+            event_loop,
+            editor,
+            self.project_root.clone(),
         )));
     }
 
@@ -178,6 +190,25 @@ impl ApplicationHandler for Application {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::KeyboardInput { event, .. } => self.handle_key(&event),
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some(state) = self.window_state.as_mut() {
+                    state.pointer = position;
+                }
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                if let Some(state) = self.window_state.as_mut() {
+                    state.place_cursor_from_pointer();
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if let Some(state) = self.window_state.as_mut() {
+                    state.scroll(delta);
+                }
+            }
             WindowEvent::Resized(size) if size.width > 0 && size.height > 0 => {
                 if let Some(state) = self.window_state.as_mut() {
                     state.resize(size.width, size.height);
@@ -211,11 +242,19 @@ struct WindowState {
     renderer: TextRenderer,
     text_buffer: TextBuffer,
     blink_started: Instant,
+    scroll_line: usize,
+    pointer: PhysicalPosition<f64>,
+    rendered_cursor_byte: Option<usize>,
     window: Arc<Window>,
 }
 
 impl WindowState {
-    async fn new(window: Arc<Window>, event_loop: &ActiveEventLoop, editor: EditorBuffer) -> Self {
+    async fn new(
+        window: Arc<Window>,
+        event_loop: &ActiveEventLoop,
+        editor: EditorBuffer,
+        project_root: PathBuf,
+    ) -> Self {
         let size = window.inner_size();
         let instance = Instance::new(InstanceDescriptor::new_with_display_handle(Box::new(
             event_loop.owned_display_handle(),
@@ -274,10 +313,8 @@ impl WindowState {
             .path()
             .and_then(Language::from_path)
             .and_then(|language| SyntaxDocument::new(language, editor.text()).ok());
-        let project = std::env::current_dir()
-            .ok()
-            .and_then(|root| ProjectIndex::scan(root).ok());
-        Self {
+        let project = ProjectIndex::scan(project_root).ok();
+        let state = Self {
             instance,
             device,
             queue,
@@ -295,8 +332,13 @@ impl WindowState {
             renderer,
             text_buffer,
             blink_started: Instant::now(),
+            scroll_line: 0,
+            pointer: PhysicalPosition::new(0.0, 0.0),
+            rendered_cursor_byte: None,
             window,
-        }
+        };
+        state.update_title();
+        state
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -314,11 +356,88 @@ impl WindowState {
         self.blink_started = Instant::now();
     }
 
+    fn reveal_cursor(&mut self) {
+        let line = self.editor.line_column().0;
+        let visible_lines = (self.surface_config.height as usize / 24).max(1);
+        if line < self.scroll_line {
+            self.scroll_line = line;
+        } else if line >= self.scroll_line + visible_lines {
+            self.scroll_line = line + 1 - visible_lines;
+        }
+    }
+
+    fn scroll(&mut self, delta: MouseScrollDelta) {
+        if self.palette.is_some() {
+            return;
+        }
+        let lines = match delta {
+            MouseScrollDelta::LineDelta(_, y) => y.round() as isize,
+            MouseScrollDelta::PixelDelta(position) => (position.y / 24.0).round() as isize,
+        };
+        self.scroll_line = self.scroll_line.saturating_add_signed(-lines);
+        self.window.request_redraw();
+    }
+
+    fn place_cursor_from_pointer(&mut self) {
+        if self.palette.is_some() || self.pointer.x < 16.0 || self.pointer.y < 16.0 {
+            return;
+        }
+        let Some(hit) = self
+            .text_buffer
+            .hit(self.pointer.x as f32 - 16.0, self.pointer.y as f32 - 16.0)
+        else {
+            return;
+        };
+        let source = self.editor.text();
+        let mut display = source.clone();
+        if let Some(cursor) = self.rendered_cursor_byte {
+            display.insert(cursor.min(display.len()), '│');
+        }
+        let line_start = display
+            .split_inclusive('\n')
+            .take(hit.line)
+            .map(str::len)
+            .sum::<usize>();
+        let mut byte = (line_start + hit.index).min(display.len());
+        while byte > 0 && !display.is_char_boundary(byte) {
+            byte -= 1;
+        }
+        if let Some(cursor) = self.rendered_cursor_byte
+            && byte > cursor
+        {
+            byte = byte.saturating_sub('│'.len_utf8());
+        }
+        byte = byte.min(source.len());
+        while byte > 0 && !source.is_char_boundary(byte) {
+            byte -= 1;
+        }
+        self.editor.set_cursor(source[..byte].chars().count());
+        self.reset_blink();
+        self.update_title();
+        self.window.request_redraw();
+    }
+
+    fn update_title(&self) {
+        let file = self
+            .editor
+            .path()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("untitled");
+        let dirty = if self.editor.is_dirty() { "● " } else { "" };
+        let (line, column) = self.editor.line_column();
+        self.window.set_title(&format!(
+            "{dirty}{file}  —  {}:{}  —  {PRODUCT_NAME}",
+            line + 1,
+            column + 1
+        ));
+    }
+
     fn sync_syntax(&mut self) {
         if let Some(syntax) = self.syntax.as_mut()
             && let Err(error) = syntax.update_source(&self.editor.text())
         {
-            eprintln!("Apex syntax: {error}");
+            eprintln!("{PRODUCT_NAME} syntax: {error}");
         }
     }
 
@@ -391,21 +510,32 @@ impl WindowState {
                                     SyntaxDocument::new(language, self.editor.text()).ok()
                                 });
                     }
-                    Err(error) => eprintln!("Apex: {error}"),
+                    Err(error) => eprintln!("{PRODUCT_NAME}: {error}"),
                 }
             }
             PaletteKind::Commands => match command {
                 Some(CommandId("file.save")) => {
                     if let Err(error) = self.editor.save() {
-                        eprintln!("Apex: {error}");
+                        eprintln!("{PRODUCT_NAME}: {error}");
                     }
                 }
-                Some(CommandId("file.find")) => self.palette = Some(Palette::files()),
+                Some(CommandId("file.open" | "file.find")) => {
+                    self.palette = Some(Palette::files());
+                }
                 Some(CommandId("palette.open")) => self.palette = Some(Palette::commands()),
+                Some(CommandId("editor.undo")) => {
+                    self.editor.undo();
+                    self.sync_syntax();
+                }
+                Some(CommandId("editor.redo")) => {
+                    self.editor.redo();
+                    self.sync_syntax();
+                }
                 _ => {}
             },
         }
         self.reset_blink();
+        self.update_title();
     }
 
     fn palette_text(&self) -> Option<String> {
@@ -446,6 +576,7 @@ impl WindowState {
 
     fn render(&mut self) {
         let (display_text, cursor_byte) = self.display_text();
+        self.rendered_cursor_byte = cursor_byte;
         let default_attrs = Attrs::new().family(Family::Monospace);
         if let Some(syntax) = self.syntax.as_ref().filter(|_| self.palette.is_none()) {
             let spans = syntax.highlights();
@@ -456,6 +587,13 @@ impl WindowState {
             self.text_buffer
                 .set_text(&display_text, &default_attrs, Shaping::Advanced, None);
         }
+        let line = if self.palette.is_some() {
+            0
+        } else {
+            self.scroll_line
+        };
+        self.text_buffer
+            .set_scroll(glyphon::cosmic_text::Scroll::new(line, 0.0, 0.0));
         self.text_buffer
             .shape_until_scroll(&mut self.font_system, false);
         self.viewport.update(
@@ -516,11 +654,11 @@ impl WindowState {
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("Apex frame"),
+                label: Some("minamilist frame"),
             });
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Apex editor pass"),
+                label: Some("minamilist editor pass"),
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: &view,
                     depth_slice: None,

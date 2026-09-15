@@ -1,4 +1,4 @@
-//! Platform-independent editing state for Apex.
+//! Platform-independent editing state for minamilist.
 
 mod buffer;
 mod command;

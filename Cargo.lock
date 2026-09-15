@@ -88,7 +88,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "apex-ai"
-version = "0.0.1"
+version = "1.0.5"
 dependencies = [
  "reqwest",
  "serde",
@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "apex-cli"
-version = "0.0.1"
+version = "1.0.5"
 dependencies = [
  "anyhow",
  "apex-core",
@@ -107,15 +107,16 @@ dependencies = [
 
 [[package]]
 name = "apex-core"
-version = "0.0.1"
+version = "1.0.5"
 dependencies = [
  "ropey",
+ "tempfile",
  "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "apex-dap"
-version = "0.0.1"
+version = "1.0.5"
 dependencies = [
  "serde_json",
  "thiserror 2.0.20",
@@ -123,14 +124,14 @@ dependencies = [
 
 [[package]]
 name = "apex-git"
-version = "0.0.1"
+version = "1.0.5"
 dependencies = [
  "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "apex-lsp"
-version = "0.0.1"
+version = "1.0.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -139,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "apex-settings"
-version = "0.0.1"
+version = "1.0.5"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -148,7 +149,7 @@ dependencies = [
 
 [[package]]
 name = "apex-syntax"
-version = "0.0.1"
+version = "1.0.5"
 dependencies = [
  "thiserror 2.0.20",
  "tree-sitter",
@@ -163,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "apex-term"
-version = "0.0.1"
+version = "1.0.5"
 dependencies = [
  "anyhow",
  "portable-pty",
@@ -172,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "apex-ui"
-version = "0.0.1"
+version = "1.0.5"
 dependencies = [
  "anyhow",
  "apex-core",
@@ -646,6 +647,12 @@ checksum = "f1a05365e3b1c6d1650318537c7460c6923f1abdd272ad6842baa2b509957a06"
 dependencies = [
  "num-traits",
 ]
+
+[[package]]
+name = "fastrand"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "filedescriptor"
@@ -2800,6 +2807,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "getrandom 0.4.3",
+ "once_cell",
+ "rustix 1.1.4",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

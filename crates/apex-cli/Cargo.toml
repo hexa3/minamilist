@@ -6,11 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "apex"
+name = "minamilist"
 path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
 apex-core = { path = "../apex-core" }
 apex-ui = { path = "../apex-ui" }
-

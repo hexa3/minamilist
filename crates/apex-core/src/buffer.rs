@@ -36,6 +36,8 @@ pub enum BufferError {
         #[source]
         source: io::Error,
     },
+    #[error("cannot save an untitled buffer; choose a path first")]
+    Untitled,
 }
 
 impl Default for Buffer {
@@ -70,7 +72,7 @@ impl Buffer {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, BufferError> {
         let path = path.as_ref().to_path_buf();
         let file = fs::File::open(&path).map_err(|source| BufferError::Io {
-            path: path.clone(),
+            path: path.to_path_buf(),
             source,
         })?;
         let text = Rope::from_reader(file).map_err(|source| BufferError::Io {
@@ -219,6 +221,48 @@ impl Buffer {
         }
     }
 
+    pub fn move_to_document_start(&mut self) {
+        for cursor in &mut self.cursors {
+            cursor.char_index = 0;
+        }
+    }
+
+    pub fn move_to_document_end(&mut self) {
+        let end = self.text.len_chars();
+        for cursor in &mut self.cursors {
+            cursor.char_index = end;
+        }
+    }
+
+    pub fn move_word_left(&mut self) {
+        let text = &self.text;
+        for cursor in &mut self.cursors {
+            let mut index = cursor.char_index;
+            while index > 0 && text.char(index - 1).is_whitespace() {
+                index -= 1;
+            }
+            while index > 0 && is_word_character(text.char(index - 1)) {
+                index -= 1;
+            }
+            cursor.char_index = index;
+        }
+    }
+
+    pub fn move_word_right(&mut self) {
+        let text = &self.text;
+        let end = text.len_chars();
+        for cursor in &mut self.cursors {
+            let mut index = cursor.char_index;
+            while index < end && is_word_character(text.char(index)) {
+                index += 1;
+            }
+            while index < end && text.char(index).is_whitespace() {
+                index += 1;
+            }
+            cursor.char_index = index;
+        }
+    }
+
     pub fn undo(&mut self) -> bool {
         let Some(snapshot) = self.undo_stack.pop() else {
             return false;
@@ -281,18 +325,60 @@ impl Buffer {
         self.path.as_deref()
     }
 
+    pub fn line_column(&self) -> (usize, usize) {
+        let cursor = self.cursor().char_index;
+        let line = self.text.char_to_line(cursor);
+        (line, cursor - self.text.line_to_char(line))
+    }
+
     pub fn save(&mut self) -> Result<(), BufferError> {
-        let Some(path) = self.path.clone() else {
-            return Ok(());
-        };
-        let file = fs::File::create(&path).map_err(|source| BufferError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        self.text
-            .write_to(file)
-            .map_err(|source| BufferError::Io { path, source })?;
+        let path = self.path.clone().ok_or(BufferError::Untitled)?;
+        self.write_to_path(&path)?;
         self.dirty = false;
+        Ok(())
+    }
+
+    pub fn save_as(&mut self, path: impl AsRef<Path>) -> Result<(), BufferError> {
+        let path = path.as_ref().to_path_buf();
+        self.write_to_path(&path)?;
+        self.path = Some(path);
+        self.dirty = false;
+        Ok(())
+    }
+
+    fn write_to_path(&self, path: &Path) -> Result<(), BufferError> {
+        let directory = path.parent().unwrap_or_else(|| Path::new("."));
+        let mut temporary =
+            tempfile::NamedTempFile::new_in(directory).map_err(|source| BufferError::Io {
+                path: directory.to_path_buf(),
+                source,
+            })?;
+        self.text
+            .write_to(temporary.as_file_mut())
+            .map_err(|source| BufferError::Io {
+                path: temporary.path().to_path_buf(),
+                source,
+            })?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|source| BufferError::Io {
+                path: temporary.path().to_path_buf(),
+                source,
+            })?;
+        if let Ok(metadata) = fs::metadata(path) {
+            temporary
+                .as_file()
+                .set_permissions(metadata.permissions())
+                .map_err(|source| BufferError::Io {
+                    path: temporary.path().to_path_buf(),
+                    source,
+                })?;
+        }
+        temporary.persist(path).map_err(|error| BufferError::Io {
+            path: path.to_path_buf(),
+            source: error.error,
+        })?;
         Ok(())
     }
 
@@ -332,16 +418,32 @@ fn line_content_len(text: &Rope, line: usize) -> usize {
     length
 }
 
+fn is_word_character(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "minamilist-buffer-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
 
     #[test]
     fn edits_unicode_by_character_not_byte() {
         let mut buffer = Buffer::new();
-        buffer.insert("Apex 🦀");
+        buffer.insert("code 🦀");
         buffer.backspace();
-        assert_eq!(buffer.text(), "Apex ");
+        assert_eq!(buffer.text(), "code ");
         assert_eq!(buffer.cursor().char_index, 5);
     }
 
@@ -410,5 +512,39 @@ mod tests {
             buffer.cursors(),
             &[Cursor { char_index: 0 }, Cursor { char_index: 1 }]
         );
+    }
+
+    #[test]
+    fn word_and_document_navigation_are_unicode_safe() {
+        let mut buffer = Buffer::from_text("one café\nthree");
+        buffer.move_to_document_end();
+        assert_eq!(buffer.line_column(), (1, 5));
+        buffer.move_word_left();
+        assert_eq!(buffer.line_column(), (1, 0));
+        buffer.move_word_left();
+        assert_eq!(buffer.line_column(), (0, 4));
+        buffer.move_word_right();
+        assert_eq!(buffer.line_column(), (1, 0));
+        buffer.move_to_document_start();
+        assert_eq!(buffer.cursor().char_index, 0);
+    }
+
+    #[test]
+    fn untitled_buffers_require_save_as() {
+        let mut buffer = Buffer::from_text("draft");
+        assert!(matches!(buffer.save(), Err(BufferError::Untitled)));
+    }
+
+    #[test]
+    fn save_as_assigns_a_path_and_clears_dirty_state() {
+        let path = test_path("save-as.txt");
+        let mut buffer = Buffer::from_text("hello");
+        buffer.set_cursor(buffer.len_chars());
+        buffer.insert(" world");
+        buffer.save_as(&path).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "hello world");
+        assert_eq!(buffer.path(), Some(path.as_path()));
+        assert!(!buffer.is_dirty());
+        fs::remove_file(path).unwrap();
     }
 }

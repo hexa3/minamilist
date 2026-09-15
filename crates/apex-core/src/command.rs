@@ -40,84 +40,19 @@ impl CommandRegistry {
                 shortcut: Some("Ctrl+P"),
             },
             Command {
-                id: CommandId("pane.split_right"),
-                title: "View: Split Editor Right",
-                shortcut: Some("Ctrl+\\"),
-            },
-            Command {
                 id: CommandId("palette.open"),
                 title: "Show Command Palette",
                 shortcut: Some("Ctrl+Shift+P"),
             },
             Command {
-                id: CommandId("cursor.add"),
-                title: "Add Cursor",
-                shortcut: Some("Alt+Click"),
+                id: CommandId("editor.undo"),
+                title: "Edit: Undo",
+                shortcut: Some("Ctrl+Z"),
             },
             Command {
-                id: CommandId("terminal.toggle"),
-                title: "Terminal: Toggle Panel",
-                shortcut: Some("Ctrl+`"),
-            },
-            Command {
-                id: CommandId("git.status"),
-                title: "Git: Show Status",
-                shortcut: None,
-            },
-            Command {
-                id: CommandId("git.commit"),
-                title: "Git: Commit Staged",
-                shortcut: None,
-            },
-            Command {
-                id: CommandId("git.push"),
-                title: "Git: Push",
-                shortcut: None,
-            },
-            Command {
-                id: CommandId("lsp.hover"),
-                title: "Language: Show Hover",
-                shortcut: None,
-            },
-            Command {
-                id: CommandId("lsp.definition"),
-                title: "Language: Go to Definition",
-                shortcut: Some("F12"),
-            },
-            Command {
-                id: CommandId("lsp.rename"),
-                title: "Language: Rename Symbol",
-                shortcut: Some("F2"),
-            },
-            Command {
-                id: CommandId("debug.start"),
-                title: "Debug: Start",
-                shortcut: Some("F5"),
-            },
-            Command {
-                id: CommandId("debug.breakpoint"),
-                title: "Debug: Toggle Breakpoint",
-                shortcut: Some("F9"),
-            },
-            Command {
-                id: CommandId("ai.chat"),
-                title: "AI: Open Chat",
-                shortcut: Some("Ctrl+L"),
-            },
-            Command {
-                id: CommandId("ai.edit"),
-                title: "AI: Edit Selection",
-                shortcut: Some("Ctrl+K"),
-            },
-            Command {
-                id: CommandId("ai.agent"),
-                title: "AI: Start Repository Agent",
-                shortcut: None,
-            },
-            Command {
-                id: CommandId("settings.open"),
-                title: "Preferences: Open Settings",
-                shortcut: None,
+                id: CommandId("editor.redo"),
+                title: "Edit: Redo",
+                shortcut: Some("Ctrl+Shift+Z"),
             },
         ];
         Self { commands }
