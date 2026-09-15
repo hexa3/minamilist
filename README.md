@@ -97,3 +97,6 @@ cargo build --release --workspace
 ```
 
 minamilist is available under the [MIT license](LICENSE).
+
+For distribution and support requirements, see the
+[production handoff](docs/PRODUCTION.md).
