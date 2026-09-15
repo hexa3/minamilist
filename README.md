@@ -55,8 +55,11 @@ Options:
 | --- | --- |
 | `Ctrl/Cmd+P` | Find a project file |
 | `Ctrl/Cmd+Shift+P` | Open the command palette |
-| `Ctrl/Cmd+O` | Find a project file |
+| `Ctrl/Cmd+O` | Open a file with the native dialog |
 | `Ctrl/Cmd+S` | Save the active file |
+| `Ctrl/Cmd+Shift+S` | Save As with the native dialog |
+| `Ctrl/Cmd+F` | Find text in the active file |
+| `Ctrl/Cmd+A/C/X/V` | Select all, copy, cut, or paste |
 | `Ctrl/Cmd+Z` | Undo |
 | `Ctrl/Cmd+Shift+Z` or `Ctrl+Y` | Redo |
 | `Ctrl/Cmd+Left/Right` | Move by word |
@@ -66,9 +69,8 @@ Options:
 | `Ctrl/Cmd+J` | Toggle the output panel |
 | `Escape` | Close a palette |
 
-Untitled buffers deliberately require a path before they can be saved. The
-native UI does not yet include a file chooser, so pass a new or existing path
-on the command line when you intend to save it.
+Untitled buffers open a native Save As dialog on their first save. Closing or
+replacing a modified file prompts to save, discard, or cancel.
 
 ## Design
 

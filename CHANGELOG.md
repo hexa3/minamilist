@@ -17,6 +17,9 @@ This project follows semantic versioning. Dates use ISO 8601.
 - Capture stdout, stderr, duration, and exit status in a native output panel.
 - Stop running Python processes with `Shift+F5`.
 - Open not-yet-created file paths and save them on first use.
+- Added keyboard and mouse-drag selection with native cut/copy/paste.
+- Added native Open and Save As dialogs plus unsaved-change protection.
+- Added in-document search with Unicode-safe result selection.
 
 ### Changed
 

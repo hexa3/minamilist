@@ -15,6 +15,8 @@ integration.
   vertical scrolling.
 - File, dirty-state, and cursor position in the window title.
 - Non-blocking Python execution with stop control and a captured output panel.
+- Mouse and keyboard text selection, native clipboard operations, file dialogs,
+  in-document search, and unsaved-change confirmation.
 
 ## Available as tested libraries
 
@@ -28,8 +30,7 @@ integration.
 
 - Terminal, source control, debugger, language tooling, and reviewed-edit
   libraries do not yet have integrated panels. Python output is integrated.
-- The editor does not yet provide text selection, clipboard commands, a native
-  save dialog, tabs, or split-pane rendering.
+- The editor does not yet provide tabs or split-pane rendering.
 - Release binaries are not currently packaged; build with Cargo.
 
 ## Verification
