@@ -109,3 +109,7 @@ minamilist is available under the [MIT license](LICENSE).
 
 For distribution and support requirements, see the
 [production handoff](docs/PRODUCTION.md).
+
+---
+
+<p align="center">Built by <a href="https://sheheryar.xyz">Sheheryar</a> · <a href="https://github.com/hexa3">github.com/hexa3</a></p>
