@@ -147,10 +147,6 @@ fn default_shell() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        thread,
-        time::{Duration, Instant},
-    };
 
     #[test]
     fn strips_terminal_control_sequences() {
@@ -166,6 +162,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn interactive_shell_accepts_commands_and_streams_output() {
+        use std::{
+            thread,
+            time::{Duration, Instant},
+        };
+
         let mut pane = TerminalPane::start(Path::new("."), 80, 24).unwrap();
         pane.send(b"printf 'minamilist-terminal-ok\\n'\r").unwrap();
         let started = Instant::now();
