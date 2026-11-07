@@ -102,10 +102,12 @@ mod tests {
     #[test]
     fn prepares_a_missing_file_without_creating_it() {
         let name = format!("minamilist-new-{}.py", std::process::id());
-        let path = env::temp_dir().join(name);
+        let path = env::temp_dir().join(&name);
         let (buffer, root) = launch_target(Some(path.clone())).unwrap();
-        assert_eq!(buffer.path(), Some(path.as_path()));
-        assert_eq!(root, env::temp_dir().canonicalize().unwrap());
+        // temp_dir() can be a symlink (macOS: /var -> /private/var), so compare canonical forms.
+        let canonical_tmp = env::temp_dir().canonicalize().unwrap();
+        assert_eq!(buffer.path(), Some(canonical_tmp.join(&name).as_path()));
+        assert_eq!(root, canonical_tmp);
         assert!(!path.exists());
     }
 }
